@@ -190,14 +190,14 @@ void handleLine(char* line) {
   tLastCmd = millis();
   switch (line[0]) {
     case 'M': {
-      float y, p;
-      if (sscanf(line + 1, "%f %f", &y, &p) == 2) {
-        manualYaw = y; manualPitch = p;
-        if (mode != FAULT) mode = MANUAL;
-        DEBUG_SERIAL.print(F("# MANUAL ")); DEBUG_SERIAL.print(y);
-        DEBUG_SERIAL.print(' '); DEBUG_SERIAL.println(p);
-      }
-      break;
+    char* endp;
+    float y = strtof(line + 1, &endp);
+    float p = strtof(endp, &endp);
+    manualYaw = y; manualPitch = p;
+    if (mode != FAULT) mode = MANUAL;
+    DEBUG_SERIAL.print(F("# MANUAL ")); DEBUG_SERIAL.print(y);
+    DEBUG_SERIAL.print(' '); DEBUG_SERIAL.println(p);
+    break;
     }
     case 'H':
       captureHoldDirection(filt.yawOut, filt.pitchOut, q, holdDirNED);
@@ -223,13 +223,13 @@ void handleLine(char* line) {
       if (line[2] == 'G') { attSrc = ATT_GAME;     DEBUG_SERIAL.println(F("# ATT=GameRV")); }
       break;
     case 'Q': {
-      float w, x, y, z;
-      if (sscanf(line + 1, "%f %f %f %f", &w, &x, &y, &z) == 4) {
+    float w, x, y, z;
+    if (sscanf(line + 1, "%f %f %f %f", &w, &x, &y, &z) == 4) {
         q[0]=w; q[1]=x; q[2]=y; q[3]=z;
         quatNormalize(q);
         quatAccuracy = 3;
-      }
-      break;
+    }
+    break;
     }
     case '?': {
       DEBUG_SERIAL.println(F("# cmds: M yaw pitch | H | Z | T0/T1 | I R/S/J | V R/G | Q w x y z"));
