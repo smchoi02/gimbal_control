@@ -22,8 +22,8 @@
 #define TELEMETRY_HZ   (10)
 
 // ── 부호 규약 ──
-#define YAW_SIGN       (+1.0f)
-#define PITCH_SIGN     (+1.0f)
+#define YAW_SIGN       (-1.0f)
+#define PITCH_SIGN     (-1.0f)
 
 // ── DYNAMIXEL ──
 // [XL330] Model number 1200 (XL430은 1060)
@@ -47,6 +47,6 @@
 // OpenRB-150 로직은 USB 또는 별도 5V
 
 // ── 안전 ──
-#define MANUAL_HEARTBEAT_S (2.0f)
+#define MANUAL_HEARTBEAT_S (30.0f)
 // [XL330] 온도 한계도 조정 (Shutdown 기본값 확인 필요)
 #define DXL_TEMP_LIMIT_C   (65)
