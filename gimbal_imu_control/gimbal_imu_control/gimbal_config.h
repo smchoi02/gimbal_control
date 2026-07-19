@@ -46,6 +46,10 @@
 // 배터리 → 5V Buck 컨버터 (5A급) → 서보 rail
 // OpenRB-150 로직은 USB 또는 별도 5V
 
+// ── 통신 규약 (Phase 4 — config.py와 동일) [GPS 통합 2026-07-19 추가] ──
+#define COMM_TIMEOUT_S     (0.5f)    // 로켓 패킷이 이 시간 없으면 COARSE→HOLD 폴백
+#define GPS_FIX_TIMEOUT_S  (1.5f)    // 자기 GPS fix 신선도 한계
+
 // ── 안전 ──
 #define MANUAL_HEARTBEAT_S (30.0f)
 // [XL330] 온도 한계도 조정 (Shutdown 기본값 확인 필요)
