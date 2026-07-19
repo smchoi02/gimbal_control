@@ -35,6 +35,7 @@
 #include "gimbal_config.h"
 #include "geometry.h"
 #include "gimbal_controller.h"
+#include "coarse_track.h"   // [GPS 통합 2026-07-19] COARSE_TRACK 코어 (geo/gps_ublox/rocket_link 포함)
 
 // ── 하드웨어 객체 ──
 #define DXL_SERIAL   Serial1
@@ -47,7 +48,7 @@ BNO08x bno;
 bool bnoPresent = false;
 
 // ── 모드 ──
-enum Mode { STOW, MANUAL, HOLD, FAULT };
+enum Mode { STOW, MANUAL, HOLD, FAULT, COARSE };   // [GPS 통합] COARSE=4 (기존 번호 유지 위해 뒤에 추가)
 enum ImuSrc { IMU_REAL, IMU_SIM, IMU_INJECT };
 enum AttSrc { ATT_ROTATION, ATT_GAME };   // Rotation Vector vs Game RV
 
@@ -62,6 +63,10 @@ float manualYaw = 0, manualPitch = 0;
 float holdDirNED[3] = {1, 0, 0};          // HOLD 목표 방향 (세계 기준)
 bool torqueOn = false;
 GimbalCommandFilter filt;
+
+// [GPS 통합 2026-07-19] COARSE_TRACK 상태
+CoarseTracker coarse;
+bool coarseArmed = false;    // 'C'로 세팅, M/H/Z로 해제 — HOLD 폴백 후 자동 복귀 조건
 
 uint32_t tLastControl = 0, tLastTelem = 0, tLastCmd = 0;
 uint32_t tStart = 0;
@@ -165,7 +170,22 @@ void controlTick(float dt) {
       }
       break;
     case HOLD:
-      holdDirection(holdDirNED, q, &yawRaw, &pitchRaw);
+      // [GPS 통합] COARSE 대기 중(armed)이고 데이터 회복되면 복귀 (fsm.py: comm recovered)
+      if (coarseArmed && coarse.compute(q, millis(), &yawRaw, &pitchRaw)) {
+        mode = COARSE;
+        DEBUG_SERIAL.println(F("# comm recovered -> COARSE"));
+      } else {
+        holdDirection(holdDirNED, q, &yawRaw, &pitchRaw);
+      }
+      break;
+    case COARSE:
+      // [GPS 통합] 로켓 지향각 계산. 데이터 상실 시 현재 방향 잡고 HOLD 폴백 (fsm.py: comm lost)
+      if (!coarse.compute(q, millis(), &yawRaw, &pitchRaw)) {
+        captureHoldDirection(filt.yawOut, filt.pitchOut, q, holdDirNED);
+        mode = HOLD;
+        DEBUG_SERIAL.println(F("# comm lost -> HOLD"));
+        yawRaw = filt.yawOut; pitchRaw = filt.pitchOut;
+      }
       break;
     case FAULT:
       return;   // torque off 상태 유지, 명령 안 보냄
@@ -197,6 +217,7 @@ void handleLine(char* line) {
     float y = strtof(line + 1, &endp);
     float p = strtof(endp, &endp);
     manualYaw = y; manualPitch = p;
+    coarseArmed = false;                       // [GPS 통합] 수동 개입 시 COARSE 해제
     if (mode != FAULT) mode = MANUAL;
     DEBUG_SERIAL.print(F("# MANUAL ")); DEBUG_SERIAL.print(y);
     DEBUG_SERIAL.print(' '); DEBUG_SERIAL.println(p);
@@ -204,10 +225,12 @@ void handleLine(char* line) {
     }
     case 'H':
       captureHoldDirection(filt.yawOut, filt.pitchOut, q, holdDirNED);
+      coarseArmed = false;                     // [GPS 통합] 수동 HOLD는 COARSE 해제
       if (mode != FAULT) mode = HOLD;
       DEBUG_SERIAL.println(F("# HOLD: direction captured"));
       break;
     case 'Z':
+      coarseArmed = false;                     // [GPS 통합]
       if (mode != FAULT) mode = STOW;
       DEBUG_SERIAL.println(F("# STOW"));
       break;
@@ -241,8 +264,47 @@ void handleLine(char* line) {
     }
     break;
     }
+    // ── [GPS 통합 2026-07-19] COARSE_TRACK 명령 ──
+    case 'C':      // COARSE 시작 (데이터 없으면 HOLD로 대기하다 자동 진입)
+      if (mode != FAULT) {
+        coarseArmed = true;
+        if (coarse.ready(millis())) {
+          mode = COARSE;
+          DEBUG_SERIAL.println(F("# COARSE start"));
+        } else {
+          captureHoldDirection(filt.yawOut, filt.pitchOut, q, holdDirNED);
+          mode = HOLD;
+          DEBUG_SERIAL.println(F("# COARSE armed - no data yet (HOLD)"));
+        }
+      }
+      break;
+    case 'G': {    // 페이로드 GPS 주입: G <iTOW_ms> <lat_i7> <lon_i7> <alt_m>
+      char* e;     //   (실물에선 gpsPoll()이 대신 공급 — loop()의 배선 주석 참고)
+      GpsFix f;
+      f.iTOW    = (uint32_t)strtoul(line + 1, &e, 10);
+      f.lat_i7  = (int32_t)strtol(e, &e, 10);
+      f.lon_i7  = (int32_t)strtol(e, &e, 10);
+      f.alt_m   = strtof(e, &e);
+      f.fixType = 3; f.numSV = 12; f.valid = true;
+      coarse.onFix(f, millis());
+      break;
+    }
+    case 'R': {    // 로켓 패킷 주입: R <iTOW_ms> <lat_i7> <lon_i7> <alt_mm> <vN_mms> <vE_mms> <vD_mms>
+      char* e;     //   (실물에선 rocketLinkPoll()이 대신 공급)
+      RocketPacket p;
+      p.iTOW     = (uint32_t)strtoul(line + 1, &e, 10);
+      p.lat_i7   = (int32_t)strtol(e, &e, 10);
+      p.lon_i7   = (int32_t)strtol(e, &e, 10);
+      p.alt_mm   = (int32_t)strtol(e, &e, 10);
+      p.velN_mms = (int32_t)strtol(e, &e, 10);
+      p.velE_mms = (int32_t)strtol(e, &e, 10);
+      p.velD_mms = (int32_t)strtol(e, &e, 10);
+      p.fixType  = 3;
+      coarse.onPacket(p, millis());
+      break;
+    }
     case '?': {
-      DEBUG_SERIAL.println(F("# cmds: M yaw pitch | H | Z | T0/T1 | I R/S/J | V R/G | Q w x y z"));
+      DEBUG_SERIAL.println(F("# cmds: M yaw pitch | H | Z | C | T0/T1 | I R/S/J | V R/G | Q w x y z | G iTOW lat7 lon7 alt | R iTOW lat7 lon7 altmm vN vE vD"));
       DEBUG_SERIAL.print(F("# mode=")); DEBUG_SERIAL.print(mode);
       DEBUG_SERIAL.print(F(" imuSrc=")); DEBUG_SERIAL.print(imuSrc);
       DEBUG_SERIAL.print(F(" bno=")); DEBUG_SERIAL.print(bnoPresent);
@@ -295,7 +357,10 @@ void telemetryTick() {
   DEBUG_SERIAL.print(dp, 2);  DEBUG_SERIAL.print(',');
   DEBUG_SERIAL.print(cy);     DEBUG_SERIAL.print(',');
   DEBUG_SERIAL.print(cp);     DEBUG_SERIAL.print(',');
-  DEBUG_SERIAL.println(filt.limitFlag ? 1 : 0);
+  DEBUG_SERIAL.print(filt.limitFlag ? 1 : 0);
+  DEBUG_SERIAL.print(',');                    // [GPS 통합] 15번째 열: 로켓 패킷 나이 (ms, -1=수신 전)
+  uint32_t pAge = coarse.pktAgeMs(millis());
+  DEBUG_SERIAL.println(pAge == 0xFFFFFFFFu ? -1L : (long)pAge);
 }
 
 // ─────────────────────────────────────────────────────
@@ -316,7 +381,7 @@ void setup() {
 
   if (bnoPresent) imuSrc = IMU_REAL;   // 실물 있으면 자동 REAL
 
-  DEBUG_SERIAL.println(F("# CSV: t_ms,mode,imuSrc,acc,pYaw,pPitch,pRoll,gYawCmd,gPitchCmd,dxlYaw,dxlPitch,curY,curP,limit"));
+  DEBUG_SERIAL.println(F("# CSV: t_ms,mode,imuSrc,acc,pYaw,pPitch,pRoll,gYawCmd,gPitchCmd,dxlYaw,dxlPitch,curY,curP,limit,pktAgeMs"));
   DEBUG_SERIAL.println(F("# type ? for help"));
 
   filt.reset(0, 0);
@@ -327,6 +392,11 @@ void setup() {
 void loop() {
   pollSerial();
   imuUpdate();
+
+  // [GPS 통합] 실물 백엔드 배선 지점 (부품 도착·§8 포트 확정 후):
+  //   GpsFix fx;        if (gpsPoll(&fx))        coarse.onFix(fx, millis());
+  //   RocketPacket pk;  if (rocketLinkPoll(&pk)) coarse.onPacket(pk, millis());
+  //   그 전까지는 시리얼 'G'/'R' 주입이 같은 경로로 공급 (부품 0개 검증)
 
   uint32_t now = micros();
 
