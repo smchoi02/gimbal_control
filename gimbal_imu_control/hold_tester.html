@@ -1,0 +1,560 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>짐벌 HOLD 테스터 — 가상 페이로드 요동 주입</title>
+<!-- ═══════════════════════════════════════════════════════════════
+  hold_tester.html (2D) v1.1 — 인터랙티브 Stage B 도구 (IREC 페이로드 짐벌)
+
+  · 마우스로 가상 페이로드를 흔들면 그 자세(쿼터니언)를 20Hz로
+    OpenRB-150에 주입(INJECT 모드 'Q')하고, 실제 DYNAMIXEL이
+    STABILIZED_HOLD로 상쇄하는 과정을 텔레메트리로 시각화한다.
+  · 연결: Chrome/Edge의 Web Serial (115200bps). 파일을 더블클릭해
+    크롬에서 열면 됨. ★ 아두이노 시리얼 모니터/Wizard는 닫을 것.
+  · 보드가 없으면 자동으로 '시뮬레이션 모드'(gimbal_sim과 동일 수식).
+  · v1.1: 연결 시 모터 중앙 정렬(리셋 시퀀스), 정상 해제(수신 루프
+    cancel 후 close), USB 분리 감지, '전체 리셋' 버튼 추가.
+  · 규약: yaw+=위에서 봤을 때 시계, pitch+=아래 (Phase 0)
+          텔레메트리 dxlYaw는 서보 프레임 → 실측 짐벌각 = YAW_SIGN×dxlYaw
+═══════════════════════════════════════════════════════════════ -->
+<style>
+  :root{
+    --page:#f9f9f7; --surface:#fcfcfb; --ink:#0b0b0b; --sub:#52514e;
+    --muted:#898781; --grid:#e1e0d9; --axis:#c3c2b7;
+    --blue:#2a78d6; --green:#008300; --magenta:#d55181; --red:#d03b3b;
+    --good:#0ca30c; --warn:#b45309; --ring:rgba(11,11,11,.10);
+  }
+  *{box-sizing:border-box; margin:0; padding:0}
+  body{background:var(--page); color:var(--ink);
+       font-family:system-ui,-apple-system,"Segoe UI","Malgun Gothic",sans-serif;
+       padding:18px; max-width:1180px; margin:0 auto;}
+  header{display:flex; align-items:center; gap:14px; flex-wrap:wrap; margin-bottom:14px;}
+  h1{font-size:19px; font-weight:700;}
+  h1 small{font-size:12px; color:var(--muted); font-weight:400; margin-left:8px;}
+  .pill{font-size:12px; padding:4px 10px; border-radius:999px; border:1px solid var(--ring);
+        background:var(--surface); color:var(--sub);}
+  .pill.on{border-color:var(--good); color:var(--good); font-weight:600;}
+  .pill.sim{border-color:var(--warn); color:var(--warn); font-weight:600;}
+  button{font:inherit; font-size:13px; padding:7px 14px; border-radius:8px; cursor:pointer;
+         border:1px solid var(--ring); background:var(--surface); color:var(--ink);}
+  button:hover{background:#f1f1ee;}
+  button.primary{background:var(--blue); border-color:var(--blue); color:#fff; font-weight:600;}
+  button.primary:hover{background:#256abf;}
+  button:disabled{opacity:.45; cursor:default;}
+  main{display:grid; grid-template-columns:480px 1fr; gap:14px;}
+  .card{background:var(--surface); border:1px solid var(--ring); border-radius:12px; padding:14px;}
+  .card h2{font-size:13px; color:var(--sub); font-weight:600; margin-bottom:8px;}
+  #scene{display:block; border-radius:8px; cursor:grab; touch-action:none; width:100%;}
+  #scene.dragging{cursor:grabbing;}
+  .hint{font-size:12px; color:var(--muted); margin-top:8px; line-height:1.5;}
+  .row{display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:10px;}
+  label.chk{font-size:13px; color:var(--sub); display:flex; gap:6px; align-items:center; cursor:pointer;}
+  .stats{display:grid; grid-template-columns:repeat(6,1fr); gap:8px; margin-bottom:10px;}
+  .stat{background:var(--page); border:1px solid var(--ring); border-radius:8px; padding:8px 10px;}
+  .stat .k{font-size:11px; color:var(--muted); margin-bottom:2px; white-space:nowrap;}
+  .stat .v{font-size:17px; font-weight:700; font-variant-numeric:tabular-nums;}
+  .stat .v.blue{color:var(--blue)} .stat .v.green{color:var(--green)}
+  .stat .v.magenta{color:var(--magenta)}
+  .stat .v.limit-on{color:var(--red)}
+  #chart{display:block; width:100%; border-radius:8px;}
+  .legend{display:flex; gap:16px; font-size:12px; color:var(--sub); margin:6px 2px 0;}
+  .legend i{display:inline-block; width:14px; height:3px; border-radius:2px; margin-right:5px; vertical-align:middle;}
+  #log{font-family:Consolas,monospace; font-size:11px; color:var(--sub); background:var(--page);
+       border:1px solid var(--ring); border-radius:8px; padding:8px; height:92px; overflow-y:auto;
+       margin-top:10px; white-space:pre-wrap;}
+  .banner{font-size:12.5px; color:var(--warn); background:#fdf6ec; border:1px solid #f0dcc0;
+          border-radius:8px; padding:8px 12px; margin-bottom:12px; display:none;}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>짐벌 HOLD 테스터<small>가상 페이로드를 흔들면 → 실제 다이나믹셀이 상쇄</small></h1>
+  <button id="btnConnect" class="primary">보드 연결</button>
+  <span id="statusPill" class="pill sim">시뮬레이션 모드 (보드 미연결)</span>
+  <span class="pill" id="hzPill">텔레메트리 — Hz</span>
+</header>
+
+<div class="banner" id="noSerialBanner">
+  이 브라우저는 Web Serial을 지원하지 않습니다 — <b>Chrome 또는 Edge</b>에서 열어주세요.
+  (시뮬레이션 모드는 그대로 사용 가능합니다)
+</div>
+
+<main>
+  <section class="card">
+    <h2>가상 페이로드 (위에서 본 모습) — 드래그로 흔들기</h2>
+    <canvas id="scene" width="452" height="452"></canvas>
+    <div class="hint">
+      좌우 드래그 = Yaw 요동 · 상하 드래그 = Pitch 요동(아래+) · 더블클릭 = 자세 리셋<br>
+      <b style="color:var(--blue)">■ 파랑</b> 페이로드 몸체(주입 자세) ·
+      <b style="color:var(--green)">■ 초록</b> 카메라 명령 방향 ·
+      <b style="color:var(--magenta)">■ 분홍</b> 카메라 실측 방향 — 둘 다 N에 붙어 있으면 상쇄 성공<br>
+      짐벌 물리 한계 = Yaw ±170° · Pitch −10°~+90° — <b>수평 목표에서 몸체를 아래로 10° 넘게 숙이면
+      한계 밖이라 LIMIT!가 뜨는 게 정상</b>. 미션 기하(로켓이 아래쪽)는 '목표 고도각'으로 시험.
+    </div>
+    <div class="row">
+      <label class="chk"><input type="checkbox" id="chkSway"> 자동 요동 (±40°, 8초 주기 — run_sim 시나리오)</label>
+    </div>
+    <div class="row">
+      <span style="font-size:12.5px; color:var(--sub); font-weight:600;">목표 고도각(북향):</span>
+      <button id="tgt0">수평 0°</button>
+      <button id="tgt30">아래 30° — 미션 유사</button>
+      <button id="tgt60">아래 60°</button>
+    </div>
+    <div class="row">
+      <button id="btnReset" disabled>전체 리셋 (중앙+재캡처)</button>
+      <button id="btnHold" disabled>H — 방향 재캡처</button>
+      <button id="btnStow" disabled>Z — STOW</button>
+      <button id="btnT1" disabled>토크 ON</button>
+      <button id="btnT0" disabled>토크 OFF</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>실시간 판정</h2>
+    <div class="stats">
+      <div class="stat"><div class="k">pYaw 주입</div><div class="v blue" id="sPyaw">0.0°</div></div>
+      <div class="stat"><div class="k">gYawCmd 명령</div><div class="v green" id="sGyaw">0.0°</div></div>
+      <div class="stat"><div class="k">상쇄 잔차 p+g</div><div class="v" id="sErr">0.0°</div></div>
+      <div class="stat"><div class="k">서보 추적 오차</div><div class="v magenta" id="sTrack">0.0°</div></div>
+      <div class="stat"><div class="k">Pitch 명령</div><div class="v" id="sPitch">0.0°</div></div>
+      <div class="stat"><div class="k">클램프</div><div class="v" id="sLimit">—</div></div>
+    </div>
+    <canvas id="chart" width="640" height="252"></canvas>
+    <div class="legend">
+      <span><i style="background:var(--blue)"></i>pYaw (주입 요동)</span>
+      <span><i style="background:var(--green)"></i>gYawCmd (짐벌 명령)</span>
+      <span><i style="background:var(--magenta)"></i>실측 짐벌각 (YAW_SIGN×dxlYaw)</span>
+    </div>
+    <div id="log"># 연결 전 — 시뮬레이션 모드로 동작 중 (gimbal_sim과 동일 수식)</div>
+  </section>
+</main>
+
+<script>
+"use strict";
+/* ═══════════ 규약 상수 (gimbal_config.h와 일치) ═══════════ */
+const YAW_SIGN = -1.0;
+const MAX_RATE = 120.0;
+const YAW_MIN = -170, YAW_MAX = 170, PITCH_MIN = -10, PITCH_MAX = 90;
+const D2R = Math.PI / 180, R2D = 180 / Math.PI;
+
+/* ═══════════ geometry.py와 1:1 대응 수식 ═══════════ */
+function eulerToQuat(yawD, pitchD, rollD) {
+  const y = yawD * D2R / 2, p = pitchD * D2R / 2, r = rollD * D2R / 2;
+  const cy = Math.cos(y), sy = Math.sin(y), cp = Math.cos(p), sp = Math.sin(p),
+        cr = Math.cos(r), sr = Math.sin(r);
+  return [cr*cp*cy + sr*sp*sy, sr*cp*cy - cr*sp*sy,
+          cr*sp*cy + sr*cp*sy, cr*cp*sy - sr*sp*cy];
+}
+function quatToRb2n(q) {
+  const [w, x, y, z] = q;
+  return [[1-2*(y*y+z*z), 2*(x*y-w*z),   2*(x*z+w*y)],
+          [2*(x*y+w*z),   1-2*(x*x+z*z), 2*(y*z-w*x)],
+          [2*(x*z-w*y),   2*(y*z+w*x),   1-2*(x*x+y*y)]];
+}
+function nedToBody(v, q) {
+  const R = quatToRb2n(q);
+  return [R[0][0]*v[0]+R[1][0]*v[1]+R[2][0]*v[2],
+          R[0][1]*v[0]+R[1][1]*v[1]+R[2][1]*v[2],
+          R[0][2]*v[0]+R[1][2]*v[1]+R[2][2]*v[2]];
+}
+function bodyToGimbal(vB) {
+  const yaw = Math.atan2(vB[1], vB[0]) * R2D;
+  const horiz = Math.hypot(vB[0], vB[1]);
+  return [yaw, Math.atan2(vB[2], horiz) * R2D];
+}
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+function wrap180(a){ while (a > 180) a -= 360; while (a <= -180) a += 360; return a; }
+
+/* ═══════════ 상태 ═══════════ */
+const att = { yaw: 0, pitch: 0 };            // pitch+ = 몸체 숙임(기수 아래)
+// 표준 오일러 pitch+는 '기수 위'라서 UI 숙임 부호와 반대 → 여기서 한 번만 변환
+const attQuat = () => eulerToQuat(att.yaw, -att.pitch, 0);
+let connected = false, port = null, writer = null, curReader = null, busy = false;
+let holdDir = [1, 0, 0];
+const simFilt = { yaw: 0, pitch: 0 };
+let simDxl = { yaw: 0, pitch: 0 };
+const tele = { pYaw: 0, gYaw: 0, gPitch: 0, dxlYaw: 0, dxlPitch: 0, limit: 0 };
+const buf = [];
+const SPAN = 20;
+let teleCount = 0, lastHzT = performance.now();
+let hover = null;
+let pauseQ = false;                                   // 리셋·목표 변경 시퀀스 중 Q 스트림 일시정지
+
+/* ═══════════ 마우스 드래그 ═══════════ */
+const scene = document.getElementById('scene');
+let drag = null;
+scene.addEventListener('pointerdown', e => {
+  drag = { x: e.clientX, y: e.clientY, yaw: att.yaw, pitch: att.pitch };
+  scene.classList.add('dragging'); scene.setPointerCapture(e.pointerId);
+});
+scene.addEventListener('pointermove', e => {
+  if (!drag) return;
+  att.yaw   = wrap180(drag.yaw + (e.clientX - drag.x) * 0.45);
+  att.pitch = clamp(drag.pitch + (e.clientY - drag.y) * 0.25, -30, 45);
+});
+scene.addEventListener('pointerup', () => { drag = null; scene.classList.remove('dragging'); });
+scene.addEventListener('dblclick', () => { att.yaw = 0; att.pitch = 0; });
+
+/* 자동 요동 */
+const chkSway = document.getElementById('chkSway');
+let swayT0 = performance.now();
+chkSway.addEventListener('change', () => { swayT0 = performance.now(); });
+
+function tickAttitude() {
+  if (chkSway.checked && !drag) {
+    const t = (performance.now() - swayT0) / 1000;
+    att.yaw = 40 * Math.sin(2 * Math.PI * t / 8);
+  }
+}
+
+/* ═══════════ 시뮬레이션 (보드 없음 — stabilization.py 동일 수식) ═══════════ */
+let lastSim = performance.now();
+function tickSim() {
+  const now = performance.now(), dt = Math.min(0.1, (now - lastSim) / 1000);
+  lastSim = now;
+  if (connected) return;
+  const q = attQuat();
+  let [yRaw, pRaw] = bodyToGimbal(nedToBody(holdDir, q));
+  let lim = false;
+  let yC = clamp(wrap180(yRaw), YAW_MIN, YAW_MAX);
+  let pC = clamp(pRaw, PITCH_MIN, PITCH_MAX);
+  if (yC !== wrap180(yRaw) || pC !== pRaw) lim = true;
+  const step = MAX_RATE * dt;
+  const dy = yC - simFilt.yaw;
+  if (Math.abs(dy) > step) { yC = simFilt.yaw + step * Math.sign(dy); lim = true; }
+  const dp = pC - simFilt.pitch;
+  if (Math.abs(dp) > step) { pC = simFilt.pitch + step * Math.sign(dp); lim = true; }
+  simFilt.yaw = yC; simFilt.pitch = pC;
+  const a = 1 - Math.exp(-dt / 0.06);
+  simDxl.yaw   += ((YAW_SIGN * yC) - simDxl.yaw) * a;
+  simDxl.pitch += ((YAW_SIGN * pC) - simDxl.pitch) * a;
+  Object.assign(tele, { pYaw: att.yaw, gYaw: yC, gPitch: pC,
+                        dxlYaw: simDxl.yaw, dxlPitch: simDxl.pitch, limit: lim ? 1 : 0 });
+  pushPoint();
+}
+
+/* ═══════════ Web Serial ═══════════ */
+const logEl = document.getElementById('log');
+function logLine(s) {
+  logEl.textContent += "\n" + s;
+  logEl.scrollTop = logEl.scrollHeight;
+}
+async function sendCmd(s) {
+  if (writer) { try { await writer.write(new TextEncoder().encode(s + "\n")); } catch (e) {} }
+}
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+/* 리셋 시퀀스: 모터 중앙 정렬 → 가상 자세 0 → INJECT → 수평·북향 캡처 */
+async function resetSequence(tag) {
+  pauseQ = true;
+  try {
+    chkSway.checked = false;
+    att.yaw = 0; att.pitch = 0;
+    logLine("# " + tag + " ① 모터 중앙 정렬(Z)...");
+    await sendCmd("Z");
+    await sleep(1600);                     // rate limit 120°/s: ±170°에서도 복귀 대기
+    logLine("# " + tag + " ② INJECT 전환 + 수평·북향 자세 주입...");
+    await sendCmd("I J");       await sleep(150);
+    await sendCmd("Q 1 0 0 0"); await sleep(150);
+    await sendCmd("H");                    // 전방 수평 방향 캡처
+    holdDir = [1, 0, 0];
+    logLine("# " + tag + " 완료 — 페이로드를 흔들어보세요");
+  } finally { pauseQ = false; }
+}
+
+/* 목표 고도각 변경: 짐벌 중앙에서 deg만큼 숙인 임시 자세로 H → 아래 deg° 방향 캡처 */
+async function setTargetPitch(deg) {
+  if (busy) return;
+  busy = true; pauseQ = true;
+  try {
+    if (connected) {
+      const qt = eulerToQuat(0, -deg, 0);                          // 표준 euler: 숙임 = 음수
+      await sendCmd("Q " + qt.map(v => v.toFixed(5)).join(" "));  // 임시: deg° 숙인 자세
+      await sendCmd("Z");                                          // 짐벌 중앙 정렬
+      await sleep(1200);
+      await sendCmd("H");                                          // 전방(=아래 deg°) 캡처
+      await sleep(120);
+      await sendCmd(qCmd());                                       // 실제 자세 복귀
+    }
+    holdDir = [Math.cos(deg * D2R), 0, Math.sin(deg * D2R)];       // 북향 + 아래 deg°
+    logLine("# 목표 고도각 = 아래 " + deg + "° (북향)" +
+            (deg === 0 ? " — 몸체 숙임 10° 이상은 한계 밖" : " — 숙임 여유 " + (deg + 10) + "°"));
+  } finally { busy = false; pauseQ = false; }
+}
+for (const [id, deg] of [["tgt0", 0], ["tgt30", 30], ["tgt60", 60]])
+  document.getElementById(id).addEventListener('click', () => setTargetPitch(deg));
+
+document.getElementById('btnConnect').addEventListener('click', async () => {
+  if (busy) return;
+  busy = true;
+  try {
+    if (connected) { await disconnect(); return; }
+    try {
+      port = await navigator.serial.requestPort();
+      await port.open({ baudRate: 115200 });
+    } catch (e) {
+      logLine("# 연결 실패: " + e.message + "  (시리얼 모니터/Wizard가 포트를 잡고 있으면 닫을 것)");
+      port = null;
+      return;
+    }
+    writer = port.writable.getWriter();
+    connected = true;
+    setUi(true);
+    readLoop();
+    logLine("# 연결됨");
+    await sleep(300);
+    await resetSequence("초기화");
+  } finally { busy = false; }
+});
+
+async function disconnect() {
+  logLine("# 해제 중 — STOW 복귀...");
+  try { await sendCmd("Z"); } catch (e) {}
+  await sleep(700);                        // 짐벌이 중앙으로 돌아갈 시간
+  connected = false;
+  try { if (curReader) await curReader.cancel(); } catch (e) {}   // 수신 루프 정상 종료
+  await sleep(60);
+  try { if (writer) writer.releaseLock(); } catch (e) {}
+  try { if (port) await port.close(); } catch (e) {}
+  writer = null; port = null;
+  setUi(false);
+  logLine("# 연결 해제 완료 — 짐벌은 STOW(중앙) 상태");
+}
+
+function setUi(on) {
+  document.getElementById('btnConnect').textContent = on ? "연결 해제" : "보드 연결";
+  const pill = document.getElementById('statusPill');
+  pill.textContent = on ? "보드 연결됨 — 실물 구동 중" : "시뮬레이션 모드 (보드 미연결)";
+  pill.className = "pill " + (on ? "on" : "sim");
+  for (const id of ["btnReset", "btnHold", "btnStow", "btnT1", "btnT0"])
+    document.getElementById(id).disabled = !on;
+}
+
+function qCmd() {
+  const q = attQuat();
+  return "Q " + q.map(v => v.toFixed(5)).join(" ");
+}
+setInterval(() => { if (connected && !pauseQ) sendCmd(qCmd()); }, 50);
+
+/* 텔레메트리 수신: CSV = t,mode,imuSrc,acc,pYaw,pPitch,pRoll,gYawCmd,gPitchCmd,dxlYaw,dxlPitch,curY,curP,limit */
+async function readLoop() {
+  const dec = new TextDecoder();
+  let acc = "";
+  while (connected && port && port.readable) {
+    const reader = port.readable.getReader();
+    curReader = reader;
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        acc += dec.decode(value);
+        let i;
+        while ((i = acc.indexOf("\n")) >= 0) {
+          const line = acc.slice(0, i).trim();
+          acc = acc.slice(i + 1);
+          if (!line) continue;
+          if (line.startsWith("#")) { logLine(line); continue; }
+          const c = line.split(",");
+          if (c.length >= 14) {
+            tele.pYaw = +c[4];  tele.gYaw = +c[7]; tele.gPitch = +c[8];
+            tele.dxlYaw = +c[9]; tele.dxlPitch = +c[10]; tele.limit = +c[13];
+            teleCount++;
+            pushPoint();
+          }
+        }
+      }
+    } catch (e) { /* 장치 분리 등 */ }
+    finally { try { reader.releaseLock(); } catch (e) {} curReader = null; }
+    if (!connected) break;
+  }
+}
+
+document.getElementById('btnReset').addEventListener('click', async () => {
+  if (busy || !connected) return;
+  busy = true;
+  try { await resetSequence("리셋"); } finally { busy = false; }
+});
+document.getElementById('btnHold').addEventListener('click', () => sendCmd("H"));
+document.getElementById('btnStow').addEventListener('click', () => sendCmd("Z"));
+document.getElementById('btnT1').addEventListener('click', () => sendCmd("T1"));
+document.getElementById('btnT0').addEventListener('click', () => sendCmd("T0"));
+window.addEventListener('beforeunload', () => { if (connected) sendCmd("Z"); });
+
+if ("serial" in navigator) {
+  navigator.serial.addEventListener('disconnect', () => {   // USB 뽑힘 감지
+    if (!connected) return;
+    connected = false;
+    writer = null; port = null; curReader = null;
+    setUi(false);
+    logLine("# 장치가 분리되었습니다 (USB 뽑힘) — 시뮬레이션 모드로 전환");
+  });
+} else {
+  document.getElementById('noSerialBanner').style.display = "block";
+  document.getElementById('btnConnect').disabled = true;
+}
+
+/* ═══════════ 차트 버퍼 ═══════════ */
+function pushPoint() {
+  const t = performance.now() / 1000;
+  buf.push({ t, p: tele.pYaw, g: tele.gYaw, d: YAW_SIGN * tele.dxlYaw });
+  while (buf.length && buf[0].t < t - SPAN - 1) buf.shift();
+}
+
+/* ═══════════ 렌더링 ═══════════ */
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const sceneCtx = scene.getContext('2d');
+const chart = document.getElementById('chart');
+const chartCtx = chart.getContext('2d');
+
+chart.addEventListener('pointermove', e => {
+  const r = chart.getBoundingClientRect();
+  hover = (e.clientX - r.left) * (chart.width / r.width);
+});
+chart.addEventListener('pointerleave', () => { hover = null; });
+
+function drawScene() {
+  const W = scene.width, H = scene.height, cx = W / 2, cy = H / 2;
+  const ctx = sceneCtx;
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = css('--surface'); ctx.fillRect(0, 0, W, H);
+
+  ctx.strokeStyle = css('--grid'); ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.arc(cx, cy, 190, 0, 7); ctx.stroke();
+  ctx.setLineDash([5, 5]);
+  ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx, cy - 190); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = css('--muted'); ctx.font = "600 14px system-ui";
+  ctx.textAlign = "center";
+  ctx.fillText("N (캡처된 목표 방향)", cx, cy - 200);
+
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(att.yaw * D2R);
+  ctx.fillStyle = "rgba(42,120,214,0.13)";
+  ctx.strokeStyle = css('--blue'); ctx.lineWidth = 2;
+  roundRect(ctx, -55, -75, 110, 150, 14); ctx.fill(); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0, -100); ctx.lineTo(-16, -75); ctx.lineTo(16, -75);
+  ctx.closePath(); ctx.fillStyle = css('--blue'); ctx.fill();
+  ctx.restore();
+
+  const camCmd  = (tele.pYaw + tele.gYaw) * D2R;
+  const camReal = (tele.pYaw + YAW_SIGN * tele.dxlYaw) * D2R;
+  arrow(ctx, cx, cy, camReal, 165, css('--magenta'), 5);
+  arrow(ctx, cx, cy, camCmd, 165, css('--green'), 2.5);
+
+  const gx = W - 64, gy = H - 20, gh = 120;
+  ctx.strokeStyle = css('--axis'); ctx.lineWidth = 1;
+  ctx.strokeRect(gx, gy - gh, 16, gh);
+  const py = gy - gh * (1 - (att.pitch + 30) / 75);
+  ctx.fillStyle = css('--blue');
+  ctx.fillRect(gx + 1, Math.min(py, gy - gh * (1 - 30 / 75)),
+               14, Math.abs(py - (gy - gh * (1 - 30 / 75))));
+  ctx.fillStyle = css('--muted'); ctx.font = "11px system-ui";
+  ctx.fillText("Pitch", gx + 8, gy + 14);
+  ctx.fillText((att.pitch >= 0 ? "+" : "") + att.pitch.toFixed(0) + "°", gx + 8, gy - gh - 8);
+}
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+}
+function arrow(ctx, cx, cy, ang, len, color, w) {
+  const dx = Math.sin(ang), dy = -Math.cos(ang);
+  ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = w;
+  ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + dx * len, cy + dy * len); ctx.stroke();
+  const hx = cx + dx * len, hy = cy + dy * len;
+  ctx.save(); ctx.translate(hx, hy); ctx.rotate(ang);
+  ctx.beginPath(); ctx.moveTo(0, -12); ctx.lineTo(-7, 4); ctx.lineTo(7, 4);
+  ctx.closePath(); ctx.fill(); ctx.restore();
+}
+
+function drawChart() {
+  const W = chart.width, H = chart.height, ctx = chartCtx;
+  const L = 42, R = 10, T = 10, B = 22, ph = H - T - B, pw = W - L - R;
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = css('--surface'); ctx.fillRect(0, 0, W, H);
+  const now = performance.now() / 1000, t0 = now - SPAN;
+  let mx = 0;
+  for (const pt of buf) if (pt.t >= t0)
+    mx = Math.max(mx, Math.abs(pt.p), Math.abs(pt.g), Math.abs(pt.d));
+  const yMax = mx <= 55 ? 60 : mx <= 85 ? 90 : mx <= 115 ? 120 : 180;   // 자동 스케일
+  const X = t => L + (t - t0) / SPAN * pw;
+  const Y = v => T + (1 - (v + yMax) / (2 * yMax)) * ph;
+
+  ctx.strokeStyle = css('--grid'); ctx.lineWidth = 1;
+  ctx.fillStyle = css('--muted'); ctx.font = "10px system-ui"; ctx.textAlign = "right";
+  const tick = yMax / 3;
+  for (const v of [-2 * tick, -tick, 0, tick, 2 * tick]) {
+    ctx.beginPath(); ctx.moveTo(L, Y(v)); ctx.lineTo(W - R, Y(v)); ctx.stroke();
+    ctx.fillText(v + "°", L - 6, Y(v) + 3);
+  }
+  ctx.strokeStyle = css('--axis');
+  ctx.strokeRect(L, T, pw, ph);
+
+  const series = [["p", css('--blue')], ["g", css('--green')], ["d", css('--magenta')]];
+  for (const [k, color] of series) {
+    ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.beginPath();
+    let started = false;
+    for (const pt of buf) {
+      if (pt.t < t0) continue;
+      const x = X(pt.t), y = Y(clamp(pt[k], -yMax, yMax));
+      if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+
+  if (hover !== null && hover > L && hover < W - R && buf.length) {
+    const th = t0 + (hover - L) / pw * SPAN;
+    let best = null;
+    for (const pt of buf) if (!best || Math.abs(pt.t - th) < Math.abs(best.t - th)) best = pt;
+    if (best && Math.abs(best.t - th) < 0.5) {
+      ctx.strokeStyle = css('--axis'); ctx.setLineDash([3, 3]);
+      ctx.beginPath(); ctx.moveTo(X(best.t), T); ctx.lineTo(X(best.t), T + ph); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.font = "11px system-ui"; ctx.textAlign = "left";
+      const tx = Math.min(X(best.t) + 8, W - 150);
+      ctx.fillStyle = css('--ink');
+      ctx.fillText(`p ${best.p.toFixed(1)}°  g ${best.g.toFixed(1)}°  실측 ${best.d.toFixed(1)}°`, tx, T + 14);
+    }
+  }
+  ctx.fillStyle = css('--muted'); ctx.font = "10px system-ui"; ctx.textAlign = "center";
+  ctx.fillText("최근 " + SPAN + "초", L + pw / 2, H - 7);
+}
+
+function drawStats() {
+  const set = (id, txt, cls) => {
+    const el = document.getElementById(id);
+    el.textContent = txt;
+    if (cls !== undefined) el.className = "v " + cls;
+  };
+  set('sPyaw', tele.pYaw.toFixed(1) + "°");
+  set('sGyaw', tele.gYaw.toFixed(1) + "°");
+  const resid = tele.pYaw + tele.gYaw;
+  set('sErr', (resid >= 0 ? "+" : "") + resid.toFixed(1) + "°",
+      Math.abs(resid) < 3 ? "" : "limit-on");
+  const track = Math.abs(tele.dxlYaw - YAW_SIGN * tele.gYaw);
+  set('sTrack', track.toFixed(1) + "°", "magenta");
+  set('sPitch', tele.gPitch.toFixed(1) + "°");
+  set('sLimit', tele.limit ? "LIMIT!" : "정상", tele.limit ? "limit-on" : "");
+  const now = performance.now();
+  if (now - lastHzT > 1000) {
+    document.getElementById('hzPill').textContent =
+      "텔레메트리 " + (connected ? (teleCount * 1000 / (now - lastHzT)).toFixed(0) : "—") + " Hz";
+    teleCount = 0; lastHzT = now;
+  }
+}
+
+function frame() {
+  tickAttitude();
+  tickSim();
+  drawScene();
+  drawChart();
+  drawStats();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
