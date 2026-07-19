@@ -1,3 +1,6 @@
+#include <Dynamixel2Arduino.h>
+#include <actuator.h>
+
 // ═══════════════════════════════════════════════════════════════
 // gimbal_imu_control.ino — IMU 기반 짐벌 제어 (Phase 2+3)
 // OpenRB-150 + DYNAMIXEL XL430 ×2 + BNO085
@@ -223,8 +226,15 @@ void handleLine(char* line) {
       if (line[2] == 'G') { attSrc = ATT_GAME;     DEBUG_SERIAL.println(F("# ATT=GameRV")); }
       break;
     case 'Q': {
-    float w, x, y, z;
-    if (sscanf(line + 1, "%f %f %f %f", &w, &x, &y, &z) == 4) {
+    // [FIX 2026-07-19] sscanf %f 파싱은 SAMD21(newlib-nano)에서 float 변환이
+    // 비활성이라 항상 실패 → Q 명령이 조용히 무시됨 (Stage B에서 실증: pYaw 동결).
+    // M 명령과 동일하게 strtof로 파싱한다.
+    char* endp;
+    float w = strtof(line + 1, &endp);
+    float x = strtof(endp, &endp);
+    float y = strtof(endp, &endp);
+    float z = strtof(endp, &endp);
+    if (!(w == 0.0f && x == 0.0f && y == 0.0f && z == 0.0f)) {  // 파싱 실패(전부 0) 방어
         q[0]=w; q[1]=x; q[2]=y; q[3]=z;
         quatNormalize(q);
         quatAccuracy = 3;
