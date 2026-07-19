@@ -1,4 +1,4 @@
-// ═══════════════════════════════════════════════════════════════
+// ===============================================================
 // test_parity.cpp — C++ 코어 로직을 PC에서 검증 (부품 불필요)
 //
 // 파이썬 시뮬레이터 test_vectors.py와 동일한 입력·기대값 사용.
@@ -7,18 +7,22 @@
 //
 // 모두 통과하면 → C++ 코어가 파이썬과 수치적으로 동일 → 부품 도착 후
 // 하드웨어 이슈와 알고리즘 이슈를 분리해서 디버깅 가능.
-// ═══════════════════════════════════════════════════════════════
+// ===============================================================
 #include <cstdio>
 #include <cmath>
 #include <initializer_list>
 #include "geometry.h"
 #include "gimbal_controller.h"
+#include "geo.h"
 
 static int PASS = 0, FAIL = 0;
 
+// 위경도 deg → int32 (1e-7 deg). 파이썬 config.deg_to_i7와 동일.
+static int32_t degToI7(double deg) { return (int32_t)llround(deg * 1e7); }
+
 void check(const char* name, bool cond, float got = 0, float want = 0) {
-  if (cond) { PASS++; printf("  \u2713 %s\n", name); }
-  else      { FAIL++; printf("  \u2717 %s  (got=%.3f want=%.3f)\n", name, got, want); }
+  if (cond) { PASS++; printf("  ✓ %s\n", name); }
+  else      { FAIL++; printf("  ✗ %s  (got=%.3f want=%.3f)\n", name, got, want); }
 }
 bool approx(float a, float b, float tol = 0.5f) { return fabsf(a - b) < tol; }
 
@@ -97,11 +101,11 @@ int main() {
 
   printf("=== 4. 명령 필터 (파이썬 test 8) ===\n");
   GimbalCommandFilter f;
-  const float dt = 0.02f;   // 50Hz -> max step 3.6
+  const float dt = 0.02f;   // 50Hz -> max step 2.4 (XL330: MAX_RATE 120)
 
   f.reset(0, 0);
   f.step(200, 50, dt);   // 200도 = wrap -160도 방향
-  check("명령 정규화: 200=-160 방향, 첫 스텝 -3.6", approx(f.yawOut, -3.6f, 0.01f), f.yawOut, -3.6f);
+  check("명령 정규화: 200=-160 방향, 첫 스텝 -2.4", approx(f.yawOut, -2.4f, 0.01f), f.yawOut, -2.4f);
   check("limit_flag 세워짐", f.limitFlag);
 
   for (int i = 0; i < 200; i++) f.step(200, 50, dt);
@@ -118,8 +122,56 @@ int main() {
 
   f.reset(170, 0);
   f.step(-170, 0, dt);
-  check("dead zone: +170->-170 되돌아감 (첫 스텝 166.4)",
-        approx(f.yawOut, 166.4f, 0.01f), f.yawOut, 166.4f);
+  check("dead zone: +170->-170 되돌아감 (첫 스텝 167.6)",
+        approx(f.yawOut, 167.6f, 0.01f), f.yawOut, 167.6f);
+
+  // ---------------------------------------------------------------
+  // GPS geo 코어 (파이썬 test_vectors.py의 test 1,2,5,6과 동일)
+  // ---------------------------------------------------------------
+  const double LAT0 = 37.5, LON0 = 127.0;
+  const int32_t P_LAT = degToI7(LAT0), P_LON = degToI7(LON0);
+  float dNED[3];
+
+  printf("=== 5. geo_to_ned: NED 부호 규약 (파이썬 test 1) ===\n");
+
+  GeoPoint rN   = { degToI7(LAT0 + 500.0 / 111320.0), P_LON, 100 };
+  GeoPoint pRef = { P_LAT, P_LON, 100 };
+  geoToNed(rN, pRef, dNED);
+  check("정북 500m -> dN +500", approx(dNED[0], 500, 1), dNED[0], 500);
+  check("정북 500m -> dE 0",    approx(dNED[1], 0, 1),   dNED[1], 0);
+
+  GeoPoint rE = { P_LAT, degToI7(LON0 + 500.0 / (111320.0 * cos(LAT0 * M_PI / 180.0))), 100 };
+  geoToNed(rE, pRef, dNED);
+  check("정동 500m -> dE +500", approx(dNED[1], 500, 1), dNED[1], 500);
+
+  GeoPoint rDown = { P_LAT, P_LON, 70 };
+  geoToNed(rDown, pRef, dNED);
+  check("로켓 30m 아래 -> dD +30", approx(dNED[2], 30, 0.01f), dNED[2], 30);
+
+  printf("=== 6. int32 정밀도: 1e-7deg = 1.1132cm 분해 (파이썬 test 2) ===\n");
+  GeoPoint r1u = { P_LAT + 1, P_LON, 0 };
+  GeoPoint p0  = { P_LAT, P_LON, 0 };
+  geoToNed(r1u, p0, dNED);
+  check("1e-7deg 차이 -> 0.011132m", approx(dNED[0], 0.011132f, 1e-4f), dNED[0], 0.011132f);
+
+  printf("=== 7. 통신 지연 보정 (파이썬 test 5) ===\n");
+  GeoPoint base = { P_LAT, P_LON, 100 };
+  GeoPoint pred = predictPosition(base, NedVel{30, 0, 0}, 0.15f);
+  geoToNed(pred, base, dNED);
+  check("북 30m/s x 150ms -> +4.5m", approx(dNED[0], 4.5f, 0.05f), dNED[0], 4.5f);
+  GeoPoint pred2 = predictPosition(base, NedVel{0, 0, 20}, 0.15f);
+  check("하강 20m/s x 150ms -> alt -3m", approx(pred2.alt_m, 97.0f, 0.05f), pred2.alt_m, 97.0f);
+
+  printf("=== 8. 전체 파이프라인 coarsePipeline (파이썬 test 6) ===\n");
+  GeoPoint rocket  = { degToI7(LAT0 + 50.0 / 111320.0), P_LON, 70 };
+  GeoPoint payload = { P_LAT, P_LON, 100 };
+  eulerToQuat(0, 0, 0, q);
+  coarsePipeline(rocket, NedVel{0, 0, 0}, payload, q, 0.0f, &yaw, &pitch);
+  check("파이프라인: 북50+아래30 -> yaw 0", approx(yaw, 0), yaw, 0);
+  check("파이프라인: pitch +31",            approx(pitch, 31, 1), pitch, 31);
+  eulerToQuat(90, 0, 0, q);
+  coarsePipeline(rocket, NedVel{0, 0, 0}, payload, q, 0.0f, &yaw, &pitch);
+  check("페이로드 90도 회전 -> yaw -90", approx(yaw, -90), yaw, -90);
 
   printf("\n=== 결과: %d passed, %d failed ===\n", PASS, FAIL);
   if (FAIL == 0) printf("ALL PASSED — C++ 코어가 파이썬 시뮬레이터와 일치합니다.\n");
