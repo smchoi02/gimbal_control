@@ -47,6 +47,15 @@ using namespace ControlTableItem;
 BNO08x bno;
 bool bnoPresent = false;
 
+// ── [GPS 통합] 로켓 LoRa UART = Serial3 (OpenRB-150 내장, SERCOM 수작업 불필요) ──
+//   OpenRB-150 variant: D13 = Serial3 RX(PB23), D14 = Serial3 TX(PB22) — GPIO 헤더 노출.
+//   Serial1은 DXL 전용 → 로켓 링크는 Serial3 사용. (대안: BT용 Serial2 = VIN/DXL 옆 4핀 홀)
+//   ※ 설치된 OpenRB 코어에 Serial3 인스턴스가 있는지 1회 확인(없으면 Serial2로 교체).
+#define LORA_SERIAL Serial3
+
+#include "hw_backends.h"   // [GPS 통합] gpsPoll/rocketLinkPoll/baroPoll (실하드웨어 백엔드)
+bool baroPresent = false;  // BMP390 존재 여부 (없으면 GPS 고도 폴백)
+
 // ── 모드 ──
 enum Mode { STOW, MANUAL, HOLD, FAULT, COARSE };   // [GPS 통합] COARSE=4 (기존 번호 유지 위해 뒤에 추가)
 enum ImuSrc { IMU_REAL, IMU_SIM, IMU_INJECT };
@@ -69,6 +78,7 @@ CoarseTracker coarse;
 bool coarseArmed = false;    // 'C'로 세팅, M/H/Z로 해제 — HOLD 폴백 후 자동 복귀 조건
 
 uint32_t tLastControl = 0, tLastTelem = 0, tLastCmd = 0;
+uint32_t tLastSensor = 0;   // [GPS 통합] GPS/기압계 폴 주기 타이머
 uint32_t tStart = 0;
 
 // ─────────────────────────────────────────────────────
@@ -303,8 +313,20 @@ void handleLine(char* line) {
       coarse.onPacket(p, millis());
       break;
     }
+    case 'A': {    // 페이로드 기압계 AGL 주입: A <aglM>  (실물에선 baroPoll이 공급)
+      char* e; float agl = strtof(line + 1, &e);
+      coarse.onBaro(agl, millis());
+      break;
+    }
+    case 'B':      // [GPS 통합] 기압계 발사대 0점 재캡처 (지상에서만)
+      if (baroPresent && baroZero(50)) DEBUG_SERIAL.println(F("# baro re-zeroed@pad"));
+      else DEBUG_SERIAL.println(F("# baro zero FAIL (BMP390 없음?)"));
+      break;
+    case 'P':      // [GPS 통합] u-blox 재설정 (부팅 시 GPS 미부팅으로 놓쳤을 때 수동 재전송)
+      DEBUG_SERIAL.println(gpsConfigure() ? F("# GPS reconfigured (UBX-NAV-PVT I2C 10Hz)") : F("# GPS cfg FAIL"));
+      break;
     case '?': {
-      DEBUG_SERIAL.println(F("# cmds: M yaw pitch | H | Z | C | T0/T1 | I R/S/J | V R/G | Q w x y z | G iTOW lat7 lon7 alt | R iTOW lat7 lon7 altmm vN vE vD"));
+      DEBUG_SERIAL.println(F("# cmds: M yaw pitch | H | Z | C | T0/T1 | I R/S/J | V R/G | Q w x y z | G iTOW lat7 lon7 alt | R iTOW lat7 lon7 altmm vN vE vD | A aglM | B(baro 0점) | P(GPS 재설정)"));
       DEBUG_SERIAL.print(F("# mode=")); DEBUG_SERIAL.print(mode);
       DEBUG_SERIAL.print(F(" imuSrc=")); DEBUG_SERIAL.print(imuSrc);
       DEBUG_SERIAL.print(F(" bno=")); DEBUG_SERIAL.print(bnoPresent);
@@ -381,6 +403,18 @@ void setup() {
 
   if (bnoPresent) imuSrc = IMU_REAL;   // 실물 있으면 자동 REAL
 
+  // [GPS 통합] 실하드웨어 백엔드 초기화 (Wire는 bnoInit에서 begin됨 — 없어도 아래서 재보장)
+  Wire.begin();
+  LORA_SERIAL.begin(LORA_BAUD);             // Serial3 = D13(RX)/D14(TX)
+  delay(200);                               // u-blox 콜드 스타트 여유
+  bool gpsCfg = gpsConfigure();             // u-blox → UBX-NAV-PVT I2C 10Hz (없으면 GPS 무응답)
+  DEBUG_SERIAL.print(F("# GPS cfg: "));
+  DEBUG_SERIAL.println(gpsCfg ? F("sent (UBX-NAV-PVT I2C 10Hz)") : F("I2C FAIL (GPS 연결?)"));
+  baroPresent = baroInit();
+  DEBUG_SERIAL.print(F("# BMP390: "));
+  DEBUG_SERIAL.println(baroPresent ? F("OK") : F("not found (GPS 고도 폴백)"));
+  if (baroPresent && baroZero(50)) DEBUG_SERIAL.println(F("# baro zeroed@pad (재영점: 'B')"));
+
   DEBUG_SERIAL.println(F("# CSV: t_ms,mode,imuSrc,acc,pYaw,pPitch,pRoll,gYawCmd,gPitchCmd,dxlYaw,dxlPitch,curY,curP,limit,pktAgeMs"));
   DEBUG_SERIAL.println(F("# type ? for help"));
 
@@ -393,12 +427,15 @@ void loop() {
   pollSerial();
   imuUpdate();
 
-  // [GPS 통합] 실물 백엔드 배선 지점 (부품 도착·§8 포트 확정 후):
-  //   GpsFix fx;        if (gpsPoll(&fx))        coarse.onFix(fx, millis());
-  //   RocketPacket pk;  if (rocketLinkPoll(&pk)) coarse.onPacket(pk, millis());
-  //   그 전까지는 시리얼 'G'/'R' 주입이 같은 경로로 공급 (부품 0개 검증)
-
   uint32_t now = micros();
+
+  // [GPS 통합] 실하드웨어 백엔드 폴 (hw_backends.h). 시리얼 'G'/'R'/'A' 주입과 동일 경로로 공급.
+  { RocketPacket pk; if (rocketLinkPoll(&pk)) coarse.onPacket(pk, millis()); }  // LoRa: 매 루프 UART 드레인
+  if (now - tLastSensor >= 40000u) {          // GPS(DDC)·기압계 25Hz (baro performReading 블로킹 방지)
+    tLastSensor = now;
+    GpsFix fx;   if (gpsPoll(&fx))    coarse.onFix(fx, millis());
+    float aglM;  if (baroPoll(&aglM)) coarse.onBaro(aglM, millis());
+  }
 
   if (now - tLastControl >= (uint32_t)(CONTROL_DT * 1e6f)) {
     float dt = (now - tLastControl) * 1e-6f;

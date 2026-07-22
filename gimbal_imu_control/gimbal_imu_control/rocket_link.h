@@ -20,7 +20,9 @@
 //   4   4   iTOW      로켓 GPS 주중 시각 [ms] — 지연 보정의 핵심 (§5.2)
 //   8   4   lat_i7    위도 1e-7 deg (int32 그대로 — 규약 §2, float 금지)
 //   12  4   lon_i7    경도 1e-7 deg
-//   16  4   alt_mm    hMSL [mm] (페이로드와 고도 기준 통일 — §3.2)
+//   16  4   alt_mm    기압계 AGL [mm] — 발사대 0점 기준 (§3.2 결정 2026-07-21)
+//                     ※ 와이어 포맷·필드명 불변, 의미만 hMSL→기압계 AGL.
+//                       로켓측이 이 칸을 자기 기압계 AGL로 채운다.
 //   20  4   velN_mms  NED 속도 [mm/s]
 //   24  4   velE_mms
 //   28  4   velD_mms  (아래+)
@@ -49,7 +51,7 @@ struct RocketPacket {
   uint32_t iTOW    = 0;      // [ms]
   int32_t  lat_i7  = 0;      // 1e-7 deg — 전 구간 정수 유지 (규약 §2)
   int32_t  lon_i7  = 0;
-  int32_t  alt_mm  = 0;      // hMSL [mm]
+  int32_t  alt_mm  = 0;      // 기압계 AGL [mm] (발사대 0점 — §3.2 2026-07-21)
   int32_t  velN_mms = 0;     // [mm/s]
   int32_t  velE_mms = 0;
   int32_t  velD_mms = 0;
@@ -211,6 +213,8 @@ inline NedVel rocketPacketToVel(const RocketPacket& p) {
 }
 
 // 로켓측 송신 헬퍼: 자기 GPS 픽스 → 패킷 (G-B 루프백·로켓 펌웨어 공용)
+//   ※ 고도 칸(alt_mm)은 GPS hMSL이 들어감. 기압계 고도를 쓰려면
+//     rocketPacketFromFixBaro()를 사용하거나, 이 반환값의 alt_mm을 덮어쓸 것.
 inline RocketPacket rocketPacketFromFix(const GpsFix& f, uint8_t seq) {
   RocketPacket p;
   p.seq      = seq;
@@ -222,6 +226,15 @@ inline RocketPacket rocketPacketFromFix(const GpsFix& f, uint8_t seq) {
   p.velN_mms = (int32_t)lroundf(f.vN * 1000.0f);
   p.velE_mms = (int32_t)lroundf(f.vE * 1000.0f);
   p.velD_mms = (int32_t)lroundf(f.vD * 1000.0f);
+  return p;
+}
+
+// [고도기준 2026-07-21] 로켓측 송신 헬퍼: GPS 픽스(위경도·속도·시각) +
+//   기압계 AGL[m] → 패킷. 고도만 GPS 대신 기압계 AGL로 채운다.
+//   baroAglM = 로켓 BaroAgl.altitude(현재기압) (발사대에서 0점).
+inline RocketPacket rocketPacketFromFixBaro(const GpsFix& f, float baroAglM, uint8_t seq) {
+  RocketPacket p = rocketPacketFromFix(f, seq);
+  p.alt_mm = (int32_t)lroundf(baroAglM * 1000.0f);
   return p;
 }
 

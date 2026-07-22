@@ -50,6 +50,29 @@
 #define COMM_TIMEOUT_S     (0.5f)    // 로켓 패킷이 이 시간 없으면 COARSE→HOLD 폴백
 #define GPS_FIX_TIMEOUT_S  (1.5f)    // 자기 GPS fix 신선도 한계
 
+// ── 고도 기준: 기압계 AGL [고도기준 2026-07-21] ──
+// 수직 고도를 GPS hMSL 대신 기압계 AGL로 사용(GPS 수직오차 회피).
+// 로켓·페이로드 둘 다 발사대에서 0점 → 공유 datum. baro.h 참고.
+#define BARO_TIMEOUT_S     (0.5f)       // 페이로드 기압계 고도 신선도 한계 (초과 시 GPS hMSL 폴백)
+#define BARO_P0_PA         (101325.0f)  // 미영점 시 기준기압 폴백 (표준 해면기압)
+
+// ── 예측/추적 튜닝 [예측 업그레이드 2026-07-21] ──
+// 등속 예측 P+V·Δt는 유지. 외삽 지평 Δt = 통신지연 + 서보 리드타임.
+// 메인 낙하산 전개 순간엔 리드를 죽여 과-외삽 방지(고도 게이트 = feed-forward + 반응형 ΔV = 백업).
+#define SERVO_LEAD_S          (0.15f)   // ★TUNE: 짐벌이 실제로 겨눌 때까지의 리드(서보 스텝응답 측정 후 조정)
+#define PREDICT_HORIZON_MIN_S (-1.0f)   // 외삽 지평 하한 (역외삽 허용폭)
+#define PREDICT_HORIZON_MAX_S (2.0f)    // 외삽 지평 상한 (발산 방지)
+
+// 메인 낙하산 전개 가드
+// ※ sim(run_sim.py, 2026-07-21): 가드는 메인 인플레이션이 급격(<~0.7s)할 때만 이득.
+//    완만한 전개(≳1s)면 리드 유지가 더 나음. 실제 메인 인플레이션 시간으로 ENABLE 결정.
+#define DEPLOY_GUARD_ENABLE      (0)       // [2025 IREC 실측] 메인전개 전환 2~4s(완만) → 가드 손해·반응형 ΔV 미발화 → OFF(리드 유지)
+#define MAIN_DEPLOY_ALT_AGL      (450.0f)  // ★ 메인 사출 고도 [m AGL] (미션값 — 로켓 고도계 설정과 일치시킬 것)
+#define DEPLOY_GUARD_MARGIN_UP_M (40.0f)   // 사출 고도 위 이만큼부터 가드 arm (고도계 오차 마진)
+#define DEPLOY_GUARD_MARGIN_DN_M (120.0f)  // 사출 고도 아래 이만큼까지 유지 (낙하산 인플레이션·정착)
+#define DEPLOY_DV_THRESH_MPS     (15.0f)   // 반응형 백업: |ΔV| 이 이상이면 전개로 간주
+#define DEPLOY_GUARD_HOLD_MS     (1500u)   // 반응형 가드 유지 시간 [ms]
+
 // ── 안전 ──
 #define MANUAL_HEARTBEAT_S (30.0f)
 // [XL330] 온도 한계도 조정 (Shutdown 기본값 확인 필요)
