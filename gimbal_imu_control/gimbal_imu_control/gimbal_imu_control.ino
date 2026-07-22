@@ -155,9 +155,13 @@ void imuUpdate() {
 
 bool bnoInit() {
   Wire.begin();
-  if (!bno.begin()) return false;
-  bno.enableRotationVector(10);       // 100Hz
-  bno.enableGameRotationVector(10);   // 100Hz — 둘 다 켜고 attSrc로 선택 소비
+  if (!bno.begin(0x4A)) return false;   // [2026-07-22 실측] 이 보드 BNO085 I2C 주소 = 0x4A (라이브러리 기본 0x4B 아님)
+  // [2026-07-22 프리즈 픽스] ★100Hz(10ms)로 켜면 DXL 구동과 겹칠 때 BNO I2C 스트림이 첫 패킷 후 정지(실측).
+  //   50Hz로 낮추면 해결. 또한 리포트를 실사용하는 Game RV 하나만 켜서 I2C 부하를 최소화한다.
+  bno.enableGameRotationVector(20);   // 50Hz (기본 attSrc=GameRV)
+  // bno.enableRotationVector(20);    // 지자기 기반 'V R' 쓰려면 주석 해제. 단 Game RV와 합친 총 리포트율이 올라가
+                                      //   프리즈가 재발할 수 있으니, 그땐 둘 중 하나만 켜거나 주기를 더 늘릴 것.
+                                      //   (현재 미사용 — 켜지 않으면 'V R' 선택 시 자세 갱신이 안 되니 주의)
   return true;
 }
 
