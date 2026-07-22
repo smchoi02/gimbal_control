@@ -38,6 +38,23 @@ COMM_TIMEOUT_S = 0.5      # 이 시간 동안 로켓 패킷 없으면 HOLD
 SCAN_AFTER_S   = 5.0      # HOLD 지속 시 SCAN 진입
 TYPICAL_LAG_S  = 0.07     # LoRa 통신 평균 지연 (offset 추정 초기값)
 
+# ── 고도 기준: 기압계 AGL [고도기준 2026-07-21] ─────────
+# 수직 고도 = 기압계 AGL(발사대 0점), 수평 = GPS. C++ gimbal_config.h와 동일값.
+BARO_TIMEOUT_S = 0.5      # 페이로드 기압계 고도 신선도 한계 (초과 시 GPS 폴백)
+BARO_P0_PA     = 101325.0 # 미영점 시 기준기압 폴백 (표준 해면기압)
+
+# ── 예측/추적 튜닝 [예측 업그레이드 2026-07-21] ─────────
+# 외삽 지평 Δt = 통신지연 + 서보 리드타임. 전개 순간엔 리드 드롭. C++ gimbal_config.h와 동일값.
+SERVO_LEAD_S          = 0.15   # 서보 리드타임 [s] (★TUNE: 서보 스텝응답 측정 후)
+PREDICT_HORIZON_MIN_S = -1.0   # 외삽 지평 하한
+PREDICT_HORIZON_MAX_S = 2.0    # 외삽 지평 상한 (발산 방지)
+DEPLOY_GUARD_ENABLE      = 0       # [2025 IREC 실측] 메인전개 전환 2~4s(완만) → 가드 손해·반응형 미발화 → OFF(리드 유지)
+MAIN_DEPLOY_ALT_AGL      = 450.0   # 메인 사출 고도 [m AGL]
+DEPLOY_GUARD_MARGIN_UP_M = 40.0    # 사출 고도 위 arm 마진
+DEPLOY_GUARD_MARGIN_DN_M = 120.0   # 사출 고도 아래 유지 마진 (인플레이션)
+DEPLOY_DV_THRESH_MPS     = 15.0    # 반응형: |ΔV| 임계
+DEPLOY_GUARD_HOLD_MS     = 1500    # 반응형 가드 유지 [ms]
+
 # ── DYNAMIXEL 규약 ────────────────────────────────────
 YAW_ID   = 1
 PITCH_ID = 2
