@@ -5,9 +5,9 @@
 #include "src/config/system_config.h"
 
 #define DEBUG_SERIAL Serial
-#define LORA_SERIAL Serial3
+#define E22_SERIAL Serial3
 
-TrackerApp app(DEBUG_SERIAL, LORA_SERIAL);
+TrackerApp app(DEBUG_SERIAL, E22_SERIAL);
 
 void setup() {
   DEBUG_SERIAL.begin(115200);
@@ -16,7 +16,7 @@ void setup() {
 
   Wire.begin();
   Wire.setClock(cfg::I2C_CLOCK_HZ);
-  LORA_SERIAL.begin(cfg::LORA_UART_BAUD);
+  E22_SERIAL.begin(cfg::E22_UART_BAUD);
   app.begin();
 }
 

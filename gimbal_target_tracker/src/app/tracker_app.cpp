@@ -16,18 +16,7 @@ TrackerApp::TrackerApp(Stream& debug, Stream& lora)
 void TrackerApp::begin() {
   debug_.println(F("# gimbal_target_tracker boot"));
 
-  bool imuOk = false;
-#if TRACKER_USE_ICM20948
-  imuOk = imu_.begin(cfg::ICM20948_AD0_HIGH);
-  debug_.print(F("# ICM20948: "));
-  if (imuOk) {
-    debug_.print(F("OK; I2C address=0x"));
-    debug_.println(imu_.address(), HEX);
-  } else {
-    debug_.println(F("FAIL"));
-  }
-#else
-  imuOk =
+  const bool imuOk =
       imu_.begin(cfg::BNO085_ADDRESS, 20, cfg::BNO_USE_GAME_ROTATION_VECTOR);
   debug_.print(F("# BNO085: "));
   if (imuOk) {
@@ -37,7 +26,6 @@ void TrackerApp::begin() {
   } else {
     debug_.println(F("FAIL"));
   }
-#endif
 
   const bool baroOk = barometer_.begin(cfg::BMP581_ADDRESS);
   debug_.print(F("# BMP581: "));
@@ -49,7 +37,8 @@ void TrackerApp::begin() {
   debug_.println(gpsOk ? F("OK; NAV-PVT 10Hz requested") : F("FAIL"));
 
   e22_.begin(cfg::E22_M0_PIN, cfg::E22_M1_PIN, cfg::E22_AUX_PIN);
-  debug_.println(F("# E22: transparent receiver ready"));
+  debug_.print(F("# E22-400T22S: normal/transparent receiver "));
+  debug_.println(e22_.moduleReady() ? F("ready") : F("starting/busy"));
 
   const bool gimbalOk = gimbal_.begin();
   debug_.print(F("# DYNAMIXEL: "));
@@ -197,6 +186,8 @@ void TrackerApp::printStatus(uint32_t nowMs) {
   debug_.print(remoteInput().valid &&
                isFresh(nowMs, remoteInput().timestampMs,
                        cfg::REMOTE_TIMEOUT_MS));
+  debug_.print(F(" e22_ready="));
+  debug_.print(e22_.moduleReady());
   debug_.print(F(" sim="));
   debug_.print(static_cast<uint8_t>(simulation_.mode()));
   debug_.print(F(" range_m="));

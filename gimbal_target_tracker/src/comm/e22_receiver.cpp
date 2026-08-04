@@ -11,10 +11,15 @@ void E22Receiver::begin(int8_t m0Pin, int8_t m1Pin, int8_t auxPin) {
   }
   auxPin_ = auxPin;
   if (auxPin_ >= 0) pinMode(auxPin_, INPUT);
-  delay(5);  // E22 mode-switch settling time.
+  // The E22-400T22S needs at least 1 ms after an M0/M1 mode transition.
+  delay(5);
 }
 
 bool E22Receiver::poll(uint32_t nowMs) {
+  // With AUX wired, defer parsing until the module has completed startup or
+  // the current UART/radio operation. Bytes remain in the UART RX buffer.
+  if (!moduleReady()) return false;
+
   bool received = false;
   remote_protocol::Payload payload;
   while (serial_.available()) {

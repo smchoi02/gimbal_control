@@ -24,18 +24,20 @@ constexpr uint8_t BNO085_ADDRESS = 0x4A;  // Change to 0x4B if ADR is high.
 // is relative to the power-on heading. Set false only after the magnetic
 // Rotation Vector has been verified for north-referenced field tracking.
 constexpr bool BNO_USE_GAME_ROTATION_VECTOR = true;
-// ICM-20948 uses 0x68 when AD0 is low and 0x69 when AD0 is high. The driver
-// tries this preferred value first and then automatically tries the other.
-constexpr bool ICM20948_AD0_HIGH = false;
 constexpr uint8_t BMP581_ADDRESS = 0x47;  // BMP581: 0x46 primary, 0x47 secondary.
 constexpr uint8_t MAX_M10S_ADDRESS = 0x42;
 
-// EBYTE E22-900T22S. Serial3 is OpenRB D13(RX), D14(TX).
-constexpr uint32_t LORA_UART_BAUD = 9600;  // E22 factory UART default.
-// Set these to real GPIO numbers if M0/M1/AUX are connected to the MCU.
-// If -1, wire M0 and M1 to GND for Normal/transparent mode; AUX is optional.
+// EBYTE E22-400T22S. Serial3 is the OpenRB header marked RX/TX.
+// The OpenRB Arduino core internally numbers those pins 13 (RX) and 14 (TX),
+// but those numbers are not printed on the board.
+// The module UART configuration must match on the transmitter and receiver.
+constexpr uint32_t E22_UART_BAUD = 9600;
+// E22-400T22S normal/transparent mode is M0=LOW, M1=LOW. These pins must
+// never float. Set each value to an MCU GPIO when connected; otherwise wire
+// both module pins to GND and leave the corresponding value at -1.
 constexpr int8_t E22_M0_PIN = -1;
 constexpr int8_t E22_M1_PIN = -1;
+// AUX is optional. When connected, LOW means the module is busy or starting.
 constexpr int8_t E22_AUX_PIN = -1;
 
 // SD card on the board hardware SPI bus. Confirm this CS pin against your wiring.

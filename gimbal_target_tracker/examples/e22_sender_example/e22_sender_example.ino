@@ -5,12 +5,14 @@
 #include "../../src/comm/remote_packet.h"
 
 #define E22_SERIAL Serial3
+constexpr uint32_t E22_UART_BAUD = 9600;
 
 uint8_t sequenceNumber = 0;
 
 void setup() {
-  E22_SERIAL.begin(9600);
-  // E22 M0=LOW and M1=LOW: Normal/transparent mode.
+  E22_SERIAL.begin(E22_UART_BAUD);
+  // E22-400T22S: M0 and M1 must be LOW for Normal/transparent mode. Drive
+  // them from MCU GPIOs or wire both pins to GND; neither pin may float.
 }
 
 void loop() {

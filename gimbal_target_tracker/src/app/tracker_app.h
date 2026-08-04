@@ -6,13 +6,8 @@
 #include "../actuators/gimbal_controller.h"
 #include "../comm/e22_receiver.h"
 #include "../common/types.h"
-#include "../config/imu_selection.h"
 #include "../sensors/bmp581_sensor.h"
-#if TRACKER_USE_ICM20948
-#include "../sensors/icm20948_sensor.h"
-#else
 #include "../sensors/bno085_sensor.h"
-#endif
 #include "../sensors/max_m10s_sensor.h"
 #include "../simulation/virtual_remote_source.h"
 #include "../storage/sd_logger.h"
@@ -26,11 +21,7 @@ class TrackerApp {
 
  private:
   Stream& debug_;
-#if TRACKER_USE_ICM20948
-  Icm20948Sensor imu_;
-#else
   Bno085Sensor imu_;
-#endif
   Bmp581Sensor barometer_;
   MaxM10sSensor gps_;
   E22Receiver e22_;
