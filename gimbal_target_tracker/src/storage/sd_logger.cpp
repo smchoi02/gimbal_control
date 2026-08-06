@@ -23,8 +23,10 @@ bool SdLogger::createUniqueFile() {
   return false;
 }
 
-void SdLogger::writeHeader() {
-  file_.println(
+void SdLogger::writeHeader() { emitHeader(file_); }
+
+void SdLogger::emitHeader(Print& out) {
+  out.println(
       F("t_ms,mode,imu_valid,qw,qx,qy,qz,yaw_deg,pitch_deg,roll_deg,"
         "local_baro_valid,local_pressure_pa,local_temp_c,"
         "local_gps_valid,local_itow_ms,local_lat_i7,local_lon_i7,"
@@ -43,12 +45,18 @@ void SdLogger::log(uint32_t nowMs, TrackMode mode,
                    const RemoteTargetSample& remote,
                    const RelativeTarget& relative,
                    const GimbalState& gimbal) {
-  if (!ready_) return;
+  if (!ready_ && !mirror_) return;
 
-#define CSV_VALUE(...)      \
-  do {                      \
-    file_.print(__VA_ARGS__); \
-    file_.print(',');       \
+  // The header goes out once so a reader attaching mid-run can map columns.
+  if (mirror_ && !mirrorHeaderSent_) {
+    emitHeader(*mirror_);
+    mirrorHeaderSent_ = true;
+  }
+
+#define CSV_VALUE(...)  \
+  do {                  \
+    emit(__VA_ARGS__);  \
+    emitChar(',');      \
   } while (0)
 
   CSV_VALUE(nowMs);
@@ -96,10 +104,12 @@ void SdLogger::log(uint32_t nowMs, TrackMode mode,
   CSV_VALUE(gimbal.yawTemperatureC);
   CSV_VALUE(gimbal.pitchTemperatureC);
   CSV_VALUE(gimbal.limitActive ? 1 : 0);
-  file_.println(gimbal.torqueOn ? 1 : 0);
+  emit(gimbal.torqueOn ? 1 : 0);
+  emitNewline();
 
 #undef CSV_VALUE
 
+  if (!ready_) return;
   if (file_.getWriteError()) {
     ++writeErrors_;
     file_.clearWriteError();

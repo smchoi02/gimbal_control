@@ -21,9 +21,13 @@ class Bno085Sensor {
   const AttitudeSample& sample() const { return sample_; }
   uint32_t resetCount() const { return resetCount_; }
   uint32_t reportRecoveryCount() const { return reportRecoveryCount_; }
+  // How many times the sensor had to be found again after boot detection
+  // failed. A non-zero value points at power or wiring, not at software.
+  uint32_t redetectCount() const { return redetectCount_; }
 
  private:
   void restoreRotationVectorReport(uint32_t nowMs);
+  bool attach(uint32_t nowMs);
 
   TwoWire& wire_;
   BNO08x device_;
@@ -32,7 +36,10 @@ class Bno085Sensor {
   bool reportEnabled_ = false;
   bool useGameRotationVector_ = true;
   uint16_t reportIntervalMs_ = 20;
+  uint8_t address_ = 0x4A;
   uint32_t lastRecoveryAttemptMs_ = 0;
+  uint32_t lastDetectAttemptMs_ = 0;
   uint32_t resetCount_ = 0;
   uint32_t reportRecoveryCount_ = 0;
+  uint32_t redetectCount_ = 0;
 };

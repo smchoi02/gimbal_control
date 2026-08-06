@@ -6,19 +6,35 @@ bool Bno085Sensor::begin(uint8_t address, uint16_t reportIntervalMs,
                         bool useGameRotationVector) {
   reportIntervalMs_ = reportIntervalMs;
   useGameRotationVector_ = useGameRotationVector;
-  present_ = device_.begin(address, wire_);
+  address_ = address;
+  return attach(millis());
+}
+
+// Open the device and enable the rotation-vector report. Called at boot and
+// again from poll() whenever the sensor is missing: the BNO08x takes time to
+// come up, and a single boot-time probe that lands too early would otherwise
+// leave it marked absent until the next power cycle.
+bool Bno085Sensor::attach(uint32_t nowMs) {
+  present_ = device_.begin(address_, wire_);
   if (!present_) return false;
 
   reportEnabled_ =
       useGameRotationVector_
           ? device_.enableGameRotationVector(reportIntervalMs_)
           : device_.enableRotationVector(reportIntervalMs_);
-  lastRecoveryAttemptMs_ = millis();
+  lastRecoveryAttemptMs_ = nowMs;
   return reportEnabled_;
 }
 
 bool Bno085Sensor::poll(uint32_t nowMs) {
-  if (!present_) return false;
+  if (!present_) {
+    // Keep probing so a late or briefly disconnected sensor recovers on its
+    // own. One attempt per second costs a single I2C transaction.
+    if (static_cast<uint32_t>(nowMs - lastDetectAttemptMs_) < 1000U) return false;
+    lastDetectAttemptMs_ = nowMs;
+    if (!attach(nowMs)) return false;
+    ++redetectCount_;
+  }
 
   // A BNO08x reset clears all enabled reports. Re-enable the rotation-vector
   // report immediately, otherwise the sensor remains present but imu=0 forever.
