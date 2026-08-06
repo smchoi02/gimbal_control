@@ -33,16 +33,30 @@ class TrackerApp {
   bool haveLastDirection_ = false;
   bool trackingEnabled_ = true;
 
+  // Manual aiming, for bench work with no transmitter present.
+  bool manualActive_ = false;
+  float manualYawDeg_ = 0.0f;
+  float manualPitchDeg_ = 0.0f;
+  uint32_t manualCommandMs_ = 0;
+
   uint32_t lastControlUs_ = 0;
   uint32_t lastBaroUs_ = 0;
   uint32_t lastGpsPollUs_ = 0;
   uint32_t lastLogUs_ = 0;
   uint32_t lastStatusMs_ = 0;
 
-  char commandBuffer_[48] = {};
+  // A remote sample pushed in over USB. It takes over from the radio while it
+  // keeps arriving, so the full pipeline can be exercised on a bench with the
+  // real payload sensors and no transmitter built yet.
+  RemoteTargetSample injected_;
+
+  char commandBuffer_[96] = {};
   uint8_t commandLength_ = 0;
 
   void controlTick(uint32_t nowMs, float dtSeconds);
+  // Freeze the current boresight as a world direction so the gimbal holds it
+  // against payload motion. This is the stabilisation test with no target.
+  bool captureHoldDirection();
   void logTick(uint32_t nowMs);
   void printStatus(uint32_t nowMs);
   void pollCommands();

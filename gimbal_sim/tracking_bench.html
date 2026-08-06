@@ -1,0 +1,2114 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gimbal Tracking Bench — RK58</title>
+<style>
+/* ─────────────────────────────────────────────────────────────
+   Avionics night panel. Neutrals carry a teal bias; the single
+   accent is instrument amber (command), paired with a cyan that
+   only ever means "truth". Semantic colours stay separate.
+   ───────────────────────────────────────────────────────────── */
+:root {
+  --bg:        #0c1317;
+  --panel:     #121b20;
+  --panel-2:   #172228;
+  --line:      #23323a;
+  --line-soft: #1a262c;
+  --ink:       #d4dfe3;
+  --ink-dim:   #8299a3;
+  --ink-faint: #566a73;
+  --accent:    #f2a03d;   /* command / primary */
+  --on-accent: #14100a;
+  --truth:     #48c4dc;   /* ground truth */
+  --ok:        #4fb477;
+  --warn:      #e0a227;
+  --crit:      #e2564d;
+  --raw:       #a07bd0;   /* raw, unfiltered measurement */
+  --grid:      #1d2a31;
+  --shadow:    0 1px 0 rgba(255,255,255,.03), 0 8px 24px rgba(0,0,0,.4);
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg:        #e6ebed;
+    --panel:     #f7f9fa;
+    --panel-2:   #eef2f4;
+    --line:      #c8d3d8;
+    --line-soft: #dbe3e6;
+    --ink:       #16242b;
+    --ink-dim:   #4e626c;
+    --ink-faint: #7a8c95;
+    --accent:    #b96a05;
+    --on-accent: #ffffff;
+    --truth:     #0d7f97;
+    --ok:        #2f7d51;
+    --warn:      #96690a;
+    --crit:      #bf3229;
+    --raw:       #6a44a3;
+    --grid:      #d5dee2;
+    --shadow:    0 1px 0 rgba(255,255,255,.6), 0 6px 18px rgba(20,40,50,.10);
+  }
+}
+:root[data-theme="dark"] {
+  --bg:#0c1317; --panel:#121b20; --panel-2:#172228; --line:#23323a;
+  --line-soft:#1a262c; --ink:#d4dfe3; --ink-dim:#8299a3; --ink-faint:#566a73;
+  --accent:#f2a03d; --on-accent:#14100a; --truth:#48c4dc; --ok:#4fb477; --warn:#e0a227;
+  --crit:#e2564d; --raw:#a07bd0; --grid:#1d2a31;
+  --shadow:0 1px 0 rgba(255,255,255,.03), 0 8px 24px rgba(0,0,0,.4);
+}
+:root[data-theme="light"] {
+  --bg:#e6ebed; --panel:#f7f9fa; --panel-2:#eef2f4; --line:#c8d3d8;
+  --line-soft:#dbe3e6; --ink:#16242b; --ink-dim:#4e626c; --ink-faint:#7a8c95;
+  --accent:#b96a05; --on-accent:#ffffff; --truth:#0d7f97; --ok:#2f7d51; --warn:#96690a;
+  --crit:#bf3229; --raw:#6a44a3; --grid:#d5dee2;
+  --shadow:0 1px 0 rgba(255,255,255,.6), 0 6px 18px rgba(20,40,50,.10);
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 13px/1.5 ui-monospace, "SF Mono", "Cascadia Mono", "Segoe UI Mono",
+        Menlo, Consolas, "Liberation Mono", monospace;
+  -webkit-font-smoothing: antialiased;
+}
+h1, h2, h3, .ui-sans {
+  font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+}
+
+/* ── shell ─────────────────────────────────────────────── */
+#shell { display: grid; grid-template-columns: 310px 1fr; height: 100vh; }
+@media (max-width: 900px) {
+  #shell { grid-template-columns: 1fr; height: auto; }
+  #rail { height: auto !important; border-right: 0 !important; border-bottom: 1px solid var(--line); }
+}
+
+#rail {
+  background: var(--panel);
+  border-right: 1px solid var(--line);
+  overflow-y: auto;
+  height: 100vh;
+  padding-bottom: 32px;
+}
+#stage { overflow-y: auto; height: 100vh; padding: 14px 16px 40px; }
+@media (max-width: 900px) { #stage { height: auto; } }
+
+/* ── rail header ───────────────────────────────────────── */
+.brand { padding: 14px 16px 12px; border-bottom: 1px solid var(--line); }
+.brand h1 {
+  margin: 0; font-size: 15px; font-weight: 650; letter-spacing: -.01em;
+}
+.brand p { margin: 4px 0 0; color: var(--ink-dim); font-size: 11px; }
+
+/* ── control groups ────────────────────────────────────── */
+details.group { border-bottom: 1px solid var(--line-soft); }
+details.group > summary {
+  cursor: pointer; padding: 9px 16px; list-style: none;
+  font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--ink-dim); user-select: none;
+  display: flex; align-items: center; gap: 8px;
+}
+details.group > summary::-webkit-details-marker { display: none; }
+details.group > summary::before {
+  content: "▸"; font-size: 9px; color: var(--ink-faint);
+  transition: transform .15s ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  details.group > summary::before { transition: none; }
+}
+details.group[open] > summary::before { transform: rotate(90deg); }
+details.group > summary:hover { color: var(--ink); }
+details.group > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.group-body { padding: 2px 16px 14px; display: flex; flex-direction: column; gap: 9px; }
+
+.ctl { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 6px 10px; }
+.ctl label { color: var(--ink-dim); font-size: 11.5px; }
+.ctl output, .ctl .val {
+  font-size: 11.5px; color: var(--ink); font-variant-numeric: tabular-nums;
+  min-width: 62px; text-align: right;
+}
+.ctl input[type="range"] { grid-column: 1 / -1; width: 100%; margin: 0; accent-color: var(--accent); }
+.ctl input[type="number"], .ctl select {
+  grid-column: 2; background: var(--panel-2); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 3px; padding: 3px 6px;
+  font: inherit; font-size: 11.5px; width: 108px; text-align: right;
+}
+.ctl select { text-align: left; }
+.ctl.wide { grid-template-columns: 1fr; }
+.ctl.wide select { grid-column: 1 / -1; width: 100%; }
+.ctl input:focus-visible, .ctl select:focus-visible, button:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 1px;
+}
+.check { display: flex; align-items: flex-start; gap: 8px; cursor: pointer; }
+.check input { margin: 3px 0 0; accent-color: var(--accent); flex: none; }
+.check span { font-size: 11.5px; color: var(--ink-dim); }
+.check:hover span { color: var(--ink); }
+.check .hint { display: block; color: var(--ink-faint); font-size: 10.5px; margin-top: 1px; }
+
+button {
+  background: var(--panel-2); color: var(--ink); border: 1px solid var(--line);
+  border-radius: 3px; padding: 6px 10px; font: inherit; font-size: 11.5px;
+  cursor: pointer;
+}
+button:hover { border-color: var(--ink-faint); }
+button.primary {
+  background: var(--accent); border-color: var(--accent);
+  color: var(--on-accent); font-weight: 600;
+}
+button.primary:hover { filter: brightness(1.08); }
+button[disabled] { opacity: .45; cursor: not-allowed; }
+.btn-row { display: flex; gap: 6px; flex-wrap: wrap; }
+.btn-row button { flex: 1 1 auto; }
+
+/* ── source banner ─────────────────────────────────────── */
+#srcBanner {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px; margin-bottom: 10px; border-radius: 4px;
+  border: 1px solid var(--line); background: var(--panel);
+  font-size: 12px; box-shadow: var(--shadow);
+  border-left-width: 3px;
+}
+#srcBanner.sim  { border-left-color: var(--accent); }
+#srcBanner.wait { border-left-color: var(--warn); }
+#srcBanner.live { border-left-color: var(--ok); }
+#srcBanner .what { font-weight: 600; }
+#srcBanner .how { color: var(--ink-dim); }
+
+/* ── status strip ──────────────────────────────────────── */
+#status {
+  display: grid; gap: 8px; margin-bottom: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+}
+.tile {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 4px;
+  padding: 8px 10px; box-shadow: var(--shadow); position: relative; overflow: hidden;
+}
+.tile .k {
+  font-size: 9.5px; letter-spacing: .09em; text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.tile .v {
+  font-size: 19px; font-variant-numeric: tabular-nums; margin-top: 2px;
+  letter-spacing: -.02em;
+}
+.tile .u { font-size: 11px; color: var(--ink-dim); margin-left: 2px; }
+.tile.sev::after {
+  content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+}
+.tile.sev-ok::after   { background: var(--ok); }
+.tile.sev-warn::after { background: var(--warn); }
+.tile.sev-crit::after { background: var(--crit); }
+
+.pill {
+  display: inline-block; padding: 1px 7px; border-radius: 9px; font-size: 10.5px;
+  border: 1px solid currentColor; letter-spacing: .04em;
+}
+.pill.ok { color: var(--ok); } .pill.warn { color: var(--warn); }
+.pill.crit { color: var(--crit); } .pill.idle { color: var(--ink-faint); }
+
+/* ── panels ────────────────────────────────────────────── */
+.row { display: grid; gap: 12px; margin-bottom: 12px; }
+.row.two { grid-template-columns: 1fr 1fr; }
+@media (max-width: 1080px) { .row.two { grid-template-columns: 1fr; } }
+
+.panel {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 4px;
+  box-shadow: var(--shadow); display: flex; flex-direction: column; min-width: 0;
+}
+.panel > header {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 8px 12px; border-bottom: 1px solid var(--line-soft);
+}
+.panel > header h2 {
+  margin: 0; font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--ink-dim); font-weight: 600;
+}
+.panel .body { padding: 10px 12px 12px; min-width: 0; }
+.legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 10.5px; color: var(--ink-dim); }
+.legend i { display: inline-block; width: 9px; height: 2px; vertical-align: middle; margin-right: 4px; }
+
+canvas { display: block; width: 100%; }
+
+/* ── strip charts ──────────────────────────────────────── */
+#charts { display: flex; flex-direction: column; }
+.strip { border-bottom: 1px solid var(--line-soft); padding: 6px 12px 8px; }
+.strip:last-child { border-bottom: 0; }
+.strip .head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+  margin-bottom: 2px;
+}
+.strip .name { font-size: 11px; color: var(--ink-dim); }
+.strip .read { font-size: 11px; font-variant-numeric: tabular-nums; }
+
+/* ── hex dump ──────────────────────────────────────────── */
+#hex {
+  font-size: 11.5px; line-height: 1.75; letter-spacing: .02em;
+  word-break: break-all; color: var(--ink-faint);
+}
+#hex b { font-weight: 400; padding: 1px 0; }
+.f0 { color: var(--ink); background: color-mix(in srgb, var(--ink) 12%, transparent); }
+.f1 { color: var(--accent); }
+.f2 { color: var(--truth); }
+.f3 { color: var(--raw); }
+.f4 { color: var(--ok); }
+.f5 { color: var(--warn); }
+.fc { color: var(--crit); }
+
+table.fields { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+table.fields td { padding: 2px 0; border-bottom: 1px solid var(--line-soft); }
+table.fields td:first-child { color: var(--ink-dim); }
+table.fields td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+.scroll-x { overflow-x: auto; }
+
+.note {
+  font-size: 11px; color: var(--ink-dim); border-left: 2px solid var(--line);
+  padding: 2px 0 2px 10px; margin: 8px 0 0;
+}
+.note.warn { border-left-color: var(--warn); color: var(--warn); }
+.note.crit { border-left-color: var(--crit); color: var(--crit); }
+</style>
+</head>
+<body>
+<div id="shell">
+
+<!-- ═══════════ CONTROL RAIL ═══════════ -->
+<aside id="rail">
+  <div class="brand">
+    <h1>Gimbal Tracking Bench</h1>
+    <p>RK58 패킷 · 가상 모터 · 실시간 계측</p>
+  </div>
+
+  <details class="group" open>
+    <summary>데이터 소스</summary>
+    <div class="group-body">
+      <div class="ctl wide">
+        <label for="src">소스</label>
+        <select id="src">
+          <option value="sim">시뮬레이션 (가상 로켓)</option>
+          <option value="telem">실장비 — OpenRB 텔레메트리 (CSV)</option>
+          <option value="serial">실장비 — 원격 패킷만 (RK)</option>
+        </select>
+      </div>
+      <div id="simCtl">
+        <div class="btn-row">
+          <button id="run" class="primary">발사</button>
+          <button id="reset">리셋</button>
+        </div>
+        <div class="ctl" style="margin-top:9px">
+          <label for="speed">배속</label><output id="speedV">1.0×</output>
+          <input type="range" id="speed" min="0.25" max="8" step="0.25" value="1">
+        </div>
+      </div>
+      <div id="serCtl" hidden>
+        <div class="ctl">
+          <label for="baud">Baud</label>
+          <select id="baud">
+            <option>9600</option><option selected>115200</option>
+            <option>57600</option><option>38400</option>
+          </select>
+        </div>
+        <div class="ctl">
+          <label for="plen">패킷 형식</label>
+          <select id="plen">
+            <option value="0">자동 감지</option>
+            <option value="34">RK34 (현재 펌웨어)</option>
+            <option value="58">RK58 (IMU 포함)</option>
+          </select>
+        </div>
+        <div class="ctl">
+          <label for="frame">프레이밍</label>
+          <select id="frame">
+            <option value="raw">RAW 바이너리</option>
+            <option value="hex">텍스트 HEX 라인</option>
+          </select>
+        </div>
+        <div class="btn-row" style="margin-top:9px">
+          <button id="connect" class="primary">연결</button>
+          <button id="disconnect" disabled>해제</button>
+        </div>
+        <div id="cmdBar" hidden>
+          <div class="btn-row" style="margin-top:9px">
+            <button data-cmd="C">C 추적</button>
+            <button data-cmd="Z">Z 스토우</button>
+            <button data-cmd="K">K 영점</button>
+          </div>
+          <div class="btn-row">
+            <button data-cmd="T1">T1 토크 ON</button>
+            <button data-cmd="T0">T0 토크 OFF</button>
+            <button data-cmd="P">P GPS</button>
+          </div>
+          <div class="btn-row">
+            <button data-cmd="?">? 명령 목록</button>
+            <button data-cmd="L1">L1 텔레메트리</button>
+            <button data-cmd="L0">L0 정지</button>
+          </div>
+          <div class="btn-row" style="margin-top:6px">
+            <button data-cmd="H" class="primary">H 방향 고정</button>
+          </div>
+          <div class="ctl" style="margin-top:6px">
+            <label for="mYaw">수동 yaw</label>
+            <input type="number" id="mYaw" step="5" value="0">
+          </div>
+          <div class="ctl">
+            <label for="mPitch">수동 pitch</label>
+            <input type="number" id="mPitch" step="5" value="0">
+          </div>
+          <div class="btn-row">
+            <button id="mSend">M 이동</button>
+            <button id="mHold">계속 유지</button>
+          </div>
+          <div class="ctl wide" style="margin-top:10px">
+            <label for="injMode">주입 패턴</label>
+            <select id="injMode">
+              <option value="sector">부채꼴 왕복 — 가동범위 내</option>
+              <option value="orbit">원 궤도 — 360° (사각지대 통과)</option>
+              <option value="fixed">정지 표적 — 방위 확인</option>
+              <option value="flight">로켓 비행</option>
+            </select>
+          </div>
+          <div class="ctl">
+            <label for="injBear">표적 방위</label><output id="injBearV">0°</output>
+            <input type="range" id="injBear" min="0" max="359" step="15" value="0">
+          </div>
+          <div class="ctl">
+            <label for="injRange">표적 거리</label><output id="injRangeV">500 m</output>
+            <input type="range" id="injRange" min="50" max="3000" step="50" value="500">
+          </div>
+          <div class="ctl">
+            <label for="injAlt">표적 고도</label><output id="injAltV">0 m</output>
+            <input type="range" id="injAlt" min="-200" max="2000" step="25" value="0">
+          </div>
+          <div class="ctl">
+            <label for="injSweep">왕복 진폭</label><output id="injSweepV">±120°</output>
+            <input type="range" id="injSweep" min="10" max="150" step="5" value="120">
+          </div>
+          <div class="ctl">
+            <label for="injPitch">왕복 pitch</label><output id="injPitchV">0°</output>
+            <input type="range" id="injPitch" min="-10" max="80" step="5" value="0">
+          </div>
+          <div class="ctl">
+            <label for="injPeriod">주기</label><output id="injPeriodV">60 s</output>
+            <input type="range" id="injPeriod" min="20" max="300" step="10" value="60">
+          </div>
+          <div class="btn-row" style="margin-top:6px">
+            <button id="inject" class="primary">주입 시작</button>
+          </div>
+          <p class="note" id="injNote">보드의 실제 IMU·기압·GPS는 그대로 쓰고,
+            로켓 위치만 브라우저가 만들어 USB로 보냅니다. 실제 모터가 움직입니다.</p>
+        </div>
+        <p class="note" id="serNote">텔레메트리 모드는 보드가 <code>sd_logger</code>와
+          같은 46컬럼 CSV를 USB로 보내야 합니다. 패킷 모드는 E22를 USB-UART로
+          직결하면 바로 됩니다.</p>
+        <div id="log" style="margin-top:9px;max-height:110px;overflow:auto;
+             font-size:10.5px;color:var(--ink-faint);white-space:pre-wrap"></div>
+      </div>
+    </div>
+  </details>
+
+  <details class="group" open>
+    <summary>시나리오 프리셋</summary>
+    <div class="group-body">
+      <div class="btn-row">
+        <button data-preset="bench">벤치 5 m</button>
+        <button data-preset="field">야외 100 m</button>
+      </div>
+      <div class="btn-row">
+        <button data-preset="flight">실비행</button>
+        <button data-preset="ideal">무결점</button>
+      </div>
+      <p class="note">프리셋을 바꿔가며 어느 오차원이 관측된 움직임을
+        만드는지 가려낼 수 있습니다.</p>
+    </div>
+  </details>
+
+  <details class="group" open>
+    <summary>기하 — 페이로드 배치</summary>
+    <div class="group-body">
+      <div class="ctl">
+        <label for="baseline">기선 거리</label><output id="baselineV">100 m</output>
+        <input type="range" id="baseline" min="2" max="2000" step="1" value="100">
+      </div>
+      <div class="ctl">
+        <label for="bearing">발사대 방위</label><output id="bearingV">0°</output>
+        <input type="range" id="bearing" min="0" max="359" step="1" value="0">
+      </div>
+      <div class="ctl">
+        <label for="payYaw">페이로드 기수방위</label><output id="payYawV">0°</output>
+        <input type="range" id="payYaw" min="0" max="359" step="1" value="0">
+      </div>
+      <label class="check"><input type="checkbox" id="paySpin">
+        <span>페이로드 회전<span class="hint">낙하 중 스핀 재현</span></span></label>
+      <div class="ctl">
+        <label for="spinRate">스핀</label><output id="spinRateV">0 °/s</output>
+        <input type="range" id="spinRate" min="0" max="180" step="1" value="30">
+      </div>
+    </div>
+  </details>
+
+  <details class="group" open>
+    <summary>오차원 — GPS</summary>
+    <div class="group-body">
+      <div class="ctl">
+        <label for="gpsWander">완만한 wander σ</label><output id="gpsWanderV">2.0 m</output>
+        <input type="range" id="gpsWander" min="0" max="8" step="0.1" value="2">
+      </div>
+      <div class="ctl">
+        <label for="gpsWhite">백색잡음 σ</label><output id="gpsWhiteV">0.6 m</output>
+        <input type="range" id="gpsWhite" min="0" max="4" step="0.05" value="0.6">
+      </div>
+      <div class="ctl">
+        <label for="mpRate">멀티패스 점프</label><output id="mpRateV">0.0 /min</output>
+        <input type="range" id="mpRate" min="0" max="30" step="0.5" value="0">
+      </div>
+      <div class="ctl">
+        <label for="fixDrop">fix 유실률</label><output id="fixDropV">0 %</output>
+        <input type="range" id="fixDrop" min="0" max="40" step="1" value="0">
+      </div>
+      <label class="check"><input type="checkbox" id="zeroOnDrop">
+        <span>유실 시 (0,0) 송신<span class="hint">구버전 송신기 버그 재현</span></span></label>
+    </div>
+  </details>
+
+  <details class="group">
+    <summary>오차원 — 링크 · 기압 · IMU</summary>
+    <div class="group-body">
+      <div class="ctl">
+        <label for="txHz">송신 주기</label><output id="txHzV">5.0 Hz</output>
+        <input type="range" id="txHz" min="0.5" max="20" step="0.5" value="5">
+      </div>
+      <div class="ctl">
+        <label for="lagMs">링크 지연</label><output id="lagMsV">150 ms</output>
+        <input type="range" id="lagMs" min="0" max="800" step="10" value="150">
+      </div>
+      <div class="ctl">
+        <label for="jitMs">지연 지터</label><output id="jitMsV">40 ms</output>
+        <input type="range" id="jitMs" min="0" max="400" step="10" value="40">
+      </div>
+      <div class="ctl">
+        <label for="lossPct">패킷 손실</label><output id="lossPctV">2 %</output>
+        <input type="range" id="lossPct" min="0" max="60" step="1" value="2">
+      </div>
+      <div class="ctl">
+        <label for="corruptPct">비트 오류</label><output id="corruptPctV">0 %</output>
+        <input type="range" id="corruptPct" min="0" max="40" step="1" value="0">
+      </div>
+      <div class="ctl">
+        <label for="baroBias">기압고도 바이어스</label><output id="baroBiasV">0.0 m</output>
+        <input type="range" id="baroBias" min="-20" max="20" step="0.5" value="0">
+      </div>
+      <div class="ctl">
+        <label for="baroNoise">기압고도 σ</label><output id="baroNoiseV">0.5 m</output>
+        <input type="range" id="baroNoise" min="0" max="5" step="0.1" value="0.5">
+      </div>
+      <div class="ctl">
+        <label for="imuYawBias">IMU yaw 바이어스</label><output id="imuYawBiasV">0.0°</output>
+        <input type="range" id="imuYawBias" min="-20" max="20" step="0.5" value="0">
+      </div>
+      <div class="ctl">
+        <label for="imuNoise">IMU 자세 σ</label><output id="imuNoiseV">0.3°</output>
+        <input type="range" id="imuNoise" min="0" max="5" step="0.1" value="0.3">
+      </div>
+    </div>
+  </details>
+
+  <details class="group">
+    <summary>수신기 설정 (system_config.h)</summary>
+    <div class="group-body">
+      <div class="ctl">
+        <label for="cfgTimeout">REMOTE_TIMEOUT_MS</label>
+        <input type="number" id="cfgTimeout" min="50" max="10000" step="50" value="600">
+      </div>
+      <div class="ctl">
+        <label for="cfgMinRange">MIN_TARGET_RANGE_M</label>
+        <input type="number" id="cfgMinRange" min="0" max="500" step="1" value="30">
+      </div>
+      <div class="ctl">
+        <label for="cfgRate">MAX_RATE_DEG_S</label>
+        <input type="number" id="cfgRate" min="5" max="720" step="5" value="120">
+      </div>
+      <label class="check"><input type="checkbox" id="cfgForce">
+        <span>REMOTE_FORCE_USE_RECEIVED_DATA<span class="hint">fix=0 패킷도 추적에 사용</span></span></label>
+      <label class="check"><input type="checkbox" id="cfgLimits">
+        <span>ENFORCE_SOFT_GIMBAL_LIMITS<span class="hint">Yaw ±170°, Pitch −10~+90°</span></span></label>
+      <label class="check"><input type="checkbox" id="cfgLag" checked>
+        <span>지연 보정 P + V·Δt<span class="hint">현재 펌웨어에는 없는 기능</span></span></label>
+      <label class="check"><input type="checkbox" id="cfgSharedAlt" checked>
+        <span>고도 기준 공유 가정<span class="hint">현재 펌웨어 동작: ned.D = −원격AGL</span></span></label>
+    </div>
+  </details>
+
+  <details class="group">
+    <summary>페이로드 위치 (실장비 모드)</summary>
+    <div class="group-body">
+      <div class="ctl"><label for="pLat">위도</label>
+        <input type="number" id="pLat" step="0.0000001" value="37.5000000"></div>
+      <div class="ctl"><label for="pLon">경도</label>
+        <input type="number" id="pLon" step="0.0000001" value="127.0000000"></div>
+      <div class="ctl"><label for="pAlt">기준고도 m</label>
+        <input type="number" id="pAlt" step="0.1" value="0"></div>
+      <p class="note">실장비 모드에서는 원격 패킷만 들어오므로 페이로드 자신의
+        위치·기수방위는 여기서 지정합니다.</p>
+    </div>
+  </details>
+
+  <details class="group">
+    <summary>기록</summary>
+    <div class="group-body">
+      <div class="btn-row">
+        <button id="csv">CSV 내려받기</button>
+        <button id="clear">그래프 지우기</button>
+      </div>
+    </div>
+  </details>
+</aside>
+
+<!-- ═══════════ STAGE ═══════════ -->
+<main id="stage">
+  <div id="srcBanner"></div>
+  <div id="status"></div>
+
+  <div class="row two">
+    <section class="panel">
+      <header>
+        <h2>평면 시야 — North / East</h2>
+        <div class="legend">
+          <span><i style="background:var(--truth)"></i>진값</span>
+          <span><i style="background:var(--raw)"></i>수신 원시</span>
+          <span><i style="background:var(--accent)"></i>지향</span>
+        </div>
+      </header>
+      <div class="body"><canvas id="plan" height="360"></canvas></div>
+    </section>
+
+    <section class="panel">
+      <header>
+        <h2>가상 짐벌</h2>
+        <div class="legend">
+          <span><i style="background:var(--accent)"></i>명령</span>
+          <span><i style="background:var(--truth)"></i>진짜 표적 방향</span>
+        </div>
+      </header>
+      <div class="body"><canvas id="gimbal" height="360"></canvas></div>
+    </section>
+  </div>
+
+  <section class="panel" style="margin-bottom:12px">
+    <header>
+      <h2>실시간 스트립 차트</h2>
+      <span class="legend"><span id="window">최근 30 s</span></span>
+    </header>
+    <div id="charts"></div>
+  </section>
+
+  <div class="row two">
+    <section class="panel">
+      <header><h2>패킷 인스펙터 — RK58</h2><span class="legend" id="pktAge">—</span></header>
+      <div class="body">
+        <div id="hex" class="scroll-x">패킷 대기 중…</div>
+        <div class="legend" style="margin-top:8px">
+          <span><i style="background:var(--ink)"></i>헤더</span>
+          <span><i style="background:var(--accent)"></i>위치</span>
+          <span><i style="background:var(--truth)"></i>속도</span>
+          <span><i style="background:var(--raw)"></i>IMU</span>
+          <span><i style="background:var(--crit)"></i>CRC</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <header><h2>디코드 결과</h2></header>
+      <div class="body"><table class="fields"><tbody id="fields"></tbody></table></div>
+    </section>
+  </div>
+</main>
+</div>
+
+<script>
+"use strict";
+
+/* ══════════════════════════════════════════════════════════════
+   RK58 wire format — mirrors the sender byte-for-byte.
+     0-1  magic 'R','K'      2  seq            3  fixType
+     4-7  iTOW u32          8-11 lat_i7 i32   12-15 lon_i7 i32
+    16-19 alt_mm i32 (AGL) 20-23 velN_mms    24-27 velE_mms
+    28-31 velD_mms         32  imuFlags      33  quatAcc
+    34-35 imuAgeMs u16     36-41 ax,ay,az i16 (m/s^2 *100)
+    42-47 gx,gy,gz i16 (deg/s *10)           48-55 qw..qz i16 Q14
+    56-57 CRC-16/CCITT-FALSE over bytes 0..55
+   ══════════════════════════════════════════════════════════════ */
+const LEN34 = 34, LEN58 = 58, PKT_LEN = LEN58, CRC_SPAN = 56;
+const MAGIC0 = 0x52, MAGIC1 = 0x4b;   // 'R','K'
+const Q14 = 16384;
+
+function crc16(buf, len) {
+  let c = 0xffff;
+  for (let i = 0; i < len; i++) {
+    c ^= buf[i] << 8;
+    for (let b = 0; b < 8; b++) c = (c & 0x8000) ? ((c << 1) ^ 0x1021) & 0xffff : (c << 1) & 0xffff;
+  }
+  return c & 0xffff;
+}
+
+function encodeRK(f) {
+  const b = new Uint8Array(PKT_LEN), v = new DataView(b.buffer);
+  b[0] = MAGIC0; b[1] = MAGIC1; b[2] = f.seq & 0xff; b[3] = f.fixType & 0xff;
+  v.setUint32(4, f.iTOW >>> 0, true);
+  v.setInt32(8, f.lat_i7, true);
+  v.setInt32(12, f.lon_i7, true);
+  v.setInt32(16, f.alt_mm, true);
+  v.setInt32(20, f.velN_mms, true);
+  v.setInt32(24, f.velE_mms, true);
+  v.setInt32(28, f.velD_mms, true);
+  b[32] = f.imuFlags & 0xff; b[33] = f.quatAcc & 0xff;
+  v.setUint16(34, f.imuAgeMs & 0xffff, true);
+  const i16 = (x) => Math.max(-32768, Math.min(32767, Math.round(x)));
+  v.setInt16(36, i16(f.ax * 100), true);
+  v.setInt16(38, i16(f.ay * 100), true);
+  v.setInt16(40, i16(f.az * 100), true);
+  v.setInt16(42, i16(f.gx * 10), true);
+  v.setInt16(44, i16(f.gy * 10), true);
+  v.setInt16(46, i16(f.gz * 10), true);
+  v.setInt16(48, i16(f.qw * Q14), true);
+  v.setInt16(50, i16(f.qx * Q14), true);
+  v.setInt16(52, i16(f.qy * Q14), true);
+  v.setInt16(54, i16(f.qz * Q14), true);
+  v.setUint16(56, crc16(b, CRC_SPAN), true);
+  return b;
+}
+
+function decodeCommon(b, v) {
+  return {
+    seq: b[2], fixType: b[3],
+    iTOW: v.getUint32(4, true),
+    lat_i7: v.getInt32(8, true), lon_i7: v.getInt32(12, true),
+    alt_mm: v.getInt32(16, true),
+    velN_mms: v.getInt32(20, true), velE_mms: v.getInt32(24, true),
+    velD_mms: v.getInt32(28, true),
+    imuFlags: 0, quatAcc: 0, imuAgeMs: 0,
+    ax: NaN, ay: NaN, az: NaN, gx: NaN, gy: NaN, gz: NaN,
+    qw: NaN, qx: NaN, qy: NaN, qz: NaN
+  };
+}
+
+/* RK34 — the format the current firmware speaks. Bytes 0..31 are identical
+   to RK58, so only the trailer differs. */
+function decodeRK34(b) {
+  if (b.length !== LEN34 || b[0] !== MAGIC0 || b[1] !== MAGIC1) return null;
+  const v = new DataView(b.buffer, b.byteOffset, b.byteLength);
+  if (crc16(b, 32) !== v.getUint16(32, true)) return null;
+  const d = decodeCommon(b, v);
+  d.len = LEN34; d.bytes = b;
+  return d;
+}
+
+function decodeRK58(b) {
+  if (b.length !== LEN58 || b[0] !== MAGIC0 || b[1] !== MAGIC1) return null;
+  const v = new DataView(b.buffer, b.byteOffset, b.byteLength);
+  if (crc16(b, CRC_SPAN) !== v.getUint16(56, true)) return null;
+  const d = decodeCommon(b, v);
+  d.imuFlags = b[32]; d.quatAcc = b[33]; d.imuAgeMs = v.getUint16(34, true);
+  d.ax = v.getInt16(36, true) / 100; d.ay = v.getInt16(38, true) / 100;
+  d.az = v.getInt16(40, true) / 100;
+  d.gx = v.getInt16(42, true) / 10; d.gy = v.getInt16(44, true) / 10;
+  d.gz = v.getInt16(46, true) / 10;
+  d.qw = v.getInt16(48, true) / Q14; d.qx = v.getInt16(50, true) / Q14;
+  d.qy = v.getInt16(52, true) / Q14; d.qz = v.getInt16(54, true) / Q14;
+  d.len = LEN58; d.bytes = b;
+  return d;
+}
+
+const decodeRK = decodeRK58;   // simulation always emits the full frame
+
+/* Byte-stream parser with resynchronisation — same contract as the
+   firmware's remote_protocol::Parser. */
+class RkParser {
+  /* want: 0 = auto-detect, or LEN34 / LEN58 to pin the frame size.
+     In auto mode the CRC is what disambiguates: a 34-byte frame is
+     accepted the moment its own trailer checks out, otherwise the parser
+     keeps filling to 58 and tries again. */
+  constructor(want) {
+    this.want = want || 0;
+    this.buf = new Uint8Array(LEN58); this.n = 0;
+    this.ok = 0; this.bad = 0; this.lost = 0;
+    this.last = 0; this.haveSeq = false; this.lastLen = 0;
+  }
+  accept(d, out) {
+    this.ok++;
+    if (this.haveSeq) this.lost += (d.seq - this.last - 1) & 0xff;
+    this.last = d.seq; this.haveSeq = true;
+    this.lastLen = d.len; this.n = 0;
+    out.pkt = d; return true;
+  }
+  feed(byte, out) {
+    this.buf[this.n++] = byte;
+    if (this.n === 1 && this.buf[0] !== MAGIC0) { this.n = 0; return false; }
+    if (this.n === 2 && this.buf[1] !== MAGIC1) {
+      if (this.buf[1] === MAGIC0) { this.buf[0] = MAGIC0; this.n = 1; } else this.n = 0;
+      return false;
+    }
+    if (this.n === LEN34 && this.want !== LEN58) {
+      const d = decodeRK34(this.buf.slice(0, LEN34));
+      if (d) return this.accept(d, out);
+      if (this.want === LEN34) { this.bad++; this.resync(); return false; }
+    }
+    if (this.n < LEN58) return false;
+    const d = decodeRK58(this.buf.slice());
+    if (d) return this.accept(d, out);
+    this.bad++; this.resync(); return false;
+  }
+  resync() {
+    for (let i = 1; i < this.n; i++) {
+      if (this.buf[i] === MAGIC0 && (i === this.n - 1 || this.buf[i + 1] === MAGIC1)) {
+        this.buf.copyWithin(0, i, this.n); this.n -= i; return;
+      }
+    }
+    this.n = 0;
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════
+   Attitude math — transcribed from src/math/attitude_math.h
+   ══════════════════════════════════════════════════════════════ */
+const D2R = Math.PI / 180, R2D = 180 / Math.PI;
+
+function qNorm(q) {
+  const n = Math.hypot(q[0], q[1], q[2], q[3]);
+  return n > 1e-9 ? [q[0]/n, q[1]/n, q[2]/n, q[3]/n] : [1,0,0,0];
+}
+function qToRbn(q) {                       // body -> NED
+  const [w,x,y,z] = q;
+  return [
+    [1-2*(y*y+z*z), 2*(x*y-w*z),   2*(x*z+w*y)],
+    [2*(x*y+w*z),   1-2*(x*x+z*z), 2*(y*z-w*x)],
+    [2*(x*z-w*y),   2*(y*z+w*x),   1-2*(x*x+y*y)]
+  ];
+}
+function nedToBody(ned, q) {               // R^T * ned
+  const r = qToRbn(q);
+  return [
+    r[0][0]*ned[0] + r[1][0]*ned[1] + r[2][0]*ned[2],
+    r[0][1]*ned[0] + r[1][1]*ned[1] + r[2][1]*ned[2],
+    r[0][2]*ned[0] + r[1][2]*ned[1] + r[2][2]*ned[2]
+  ];
+}
+function bodyToNed(b, q) {
+  const r = qToRbn(q);
+  return [
+    r[0][0]*b[0] + r[0][1]*b[1] + r[0][2]*b[2],
+    r[1][0]*b[0] + r[1][1]*b[1] + r[1][2]*b[2],
+    r[2][0]*b[0] + r[2][1]*b[1] + r[2][2]*b[2]
+  ];
+}
+function bodyToGimbal(b) {
+  return { yaw: Math.atan2(b[1], b[0]) * R2D,
+           pitch: Math.atan2(b[2], Math.hypot(b[0], b[1])) * R2D };
+}
+function gimbalToUnit(yawDeg, pitchDeg) {
+  const y = yawDeg * D2R, p = pitchDeg * D2R, c = Math.cos(p);
+  return [c*Math.cos(y), c*Math.sin(y), Math.sin(p)];
+}
+function eulerToQuat(yawDeg, pitchDeg, rollDeg) {
+  const cy = Math.cos(yawDeg*D2R/2), sy = Math.sin(yawDeg*D2R/2);
+  const cp = Math.cos(pitchDeg*D2R/2), sp = Math.sin(pitchDeg*D2R/2);
+  const cr = Math.cos(rollDeg*D2R/2), sr = Math.sin(rollDeg*D2R/2);
+  return qNorm([cr*cp*cy + sr*sp*sy, sr*cp*cy - cr*sp*sy,
+                cr*sp*cy + sr*cp*sy, cr*cp*sy - sr*sp*cy]);
+}
+function angleBetween(a, b) {
+  const na = Math.hypot(...a), nb = Math.hypot(...b);
+  if (na < 1e-9 || nb < 1e-9) return 0;
+  let d = (a[0]*b[0] + a[1]*b[1] + a[2]*b[2]) / (na*nb);
+  d = Math.max(-1, Math.min(1, d));
+  return Math.acos(d) * R2D;
+}
+
+/* Geodesy — matches target_geometry.h. Differences are taken in
+   integer 1e-7 degrees before any float conversion, because latI7
+   reaches 1.8e9 and float32 would quantise it to metres. */
+const M_PER_I7 = 0.0111320;
+function relativeNed(localLat, localLon, remLat, remLon, remAglM, localAltM, sharedAlt) {
+  const dLat = remLat - localLat, dLon = remLon - localLon;
+  const cosLat = Math.cos(localLat * 1e-7 * D2R);
+  const down = sharedAlt ? -remAglM : -(remAglM - localAltM);
+  return [dLat * M_PER_I7, dLon * M_PER_I7 * cosLat, down];
+}
+
+/* ══════════════════════════════════════════════════════════════
+   Noise sources
+   ══════════════════════════════════════════════════════════════ */
+let seed = 0x2f6e2b1;
+function rnd() { seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5;
+                 return ((seed >>> 0) / 4294967296); }
+function gauss() {
+  let u = 0, v = 0;
+  while (u === 0) u = rnd();
+  while (v === 0) v = rnd();
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}
+
+/* Gauss-Markov wander + white noise + Poisson multipath jumps.
+   The wander term is what makes real GPS meander smoothly instead of
+   simply jittering, so it must be modelled separately. */
+class GpsNoise {
+  constructor(tau) { this.tau = tau; this.w = [0,0,0]; this.jump = [0,0,0]; this.jumpT = 0; }
+  step(dt, wanderSigma, whiteSigma, jumpsPerMin) {
+    const a = Math.exp(-dt / this.tau);
+    const q = wanderSigma * Math.sqrt(1 - a*a);
+    for (let i = 0; i < 3; i++) this.w[i] = a * this.w[i] + q * gauss();
+    if (jumpsPerMin > 0 && rnd() < (jumpsPerMin / 60) * dt) {
+      this.jump = [gauss()*wanderSigma*3, gauss()*wanderSigma*3, gauss()*wanderSigma*2];
+      this.jumpT = 1.5 + rnd() * 3;
+    }
+    if (this.jumpT > 0) { this.jumpT -= dt; if (this.jumpT <= 0) this.jump = [0,0,0]; }
+    return [
+      this.w[0] + this.jump[0] + whiteSigma * gauss(),
+      this.w[1] + this.jump[1] + whiteSigma * gauss(),
+      this.w[2] + this.jump[2] + whiteSigma * gauss() * 1.6
+    ];
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════
+   Virtual rocket — boost, coast, apogee, drogue, main.
+   Drag is expressed through terminal velocity so each phase is
+   tuned by the number an actual flight card would quote.
+   ══════════════════════════════════════════════════════════════ */
+const G = 9.80665;
+const kFromVt = (vt) => G / (vt * vt);
+
+class Rocket {
+  constructor(elevDeg, azDeg) {
+    this.p = [0, 0, 0];            // N, E, D(+down) from pad
+    this.v = [0, 0, 0];
+    this.t = 0; this.phase = "PAD";
+    this.burn = 2.6; this.thrust = 11 * G;
+    this.elev = elevDeg; this.az = azDeg;
+    this.spin = 220;               // deg/s roll during boost
+    // eulerToQuat uses the aerospace convention where positive pitch is
+    // nose-up, so an 84 deg launch elevation is pitch = +84. (Gimbal pitch
+    // in bodyToGimbal is the opposite sign — positive points down.)
+    this.q = eulerToQuat(azDeg, elevDeg, 0);
+    this.acc = [0, 0, -G];
+    this.gyro = [0, 0, 0];
+    this.roll = 0;
+    this.mainAlt = 450;
+  }
+  agl() { return -this.p[2]; }
+  step(dt, windN, windE) {
+    this.t += dt;
+    const speed = Math.hypot(...this.v);
+    let kd;
+    if (this.phase === "PAD" || this.phase === "BOOST" || this.phase === "COAST") kd = kFromVt(210);
+    else if (this.phase === "DROGUE") kd = kFromVt(24);
+    else kd = kFromVt(6.5);
+
+    // Air-relative velocity so wind actually drifts the descent.
+    const va = [this.v[0] - windN, this.v[1] - windE, this.v[2]];
+    const vaMag = Math.hypot(...va);
+    const drag = va.map(c => -kd * vaMag * c);
+
+    let thrust = [0, 0, 0];
+    if (this.phase === "PAD") this.phase = "BOOST";
+    if (this.phase === "BOOST") {
+      const axis = bodyToNed([1, 0, 0], this.q);
+      thrust = axis.map(c => c * this.thrust);
+      if (this.t >= this.burn) this.phase = "COAST";
+    }
+    const a = [
+      thrust[0] + drag[0],
+      thrust[1] + drag[1],
+      thrust[2] + drag[2] + G
+    ];
+    this.acc = a;
+    for (let i = 0; i < 3; i++) { this.v[i] += a[i] * dt; this.p[i] += this.v[i] * dt; }
+
+    if (this.phase === "COAST" && this.v[2] > 0) this.phase = "DROGUE";
+    if (this.phase === "DROGUE" && this.agl() <= this.mainAlt) this.phase = "MAIN";
+    if (this.agl() <= 0 && this.t > 1) { this.p[2] = 0; this.v = [0,0,0]; this.phase = "DOWN"; }
+
+    // Attitude: weathercock along the airflow while fast, tumble slowly
+    // once the parachute is out.
+    const prev = this.q;
+    if (this.phase === "BOOST" || this.phase === "COAST") {
+      const s = Math.hypot(...va);
+      if (s > 5) {
+        const yaw = Math.atan2(va[1], va[0]) * R2D;
+        // Airflow z is down-positive; nose-up pitch is its negation.
+        const pitch = Math.atan2(-va[2], Math.hypot(va[0], va[1])) * R2D;
+        this.roll = (this.roll + this.spin * dt) % 360;
+        this.q = eulerToQuat(yaw, pitch, this.roll);
+      }
+    } else if (this.phase !== "DOWN") {
+      this.roll = (this.roll + 40 * dt) % 360;
+      this.q = eulerToQuat(this.roll * 0.7, 20 * Math.sin(this.t * 1.1), this.roll);
+    }
+    // Body rates from the finite attitude change.
+    const dq = [
+      this.q[0]*prev[0] + this.q[1]*prev[1] + this.q[2]*prev[2] + this.q[3]*prev[3],
+      -this.q[0]*prev[1] + this.q[1]*prev[0] - this.q[2]*prev[3] + this.q[3]*prev[2],
+      -this.q[0]*prev[2] + this.q[1]*prev[3] + this.q[2]*prev[0] - this.q[3]*prev[1],
+      -this.q[0]*prev[3] - this.q[1]*prev[2] + this.q[2]*prev[1] + this.q[3]*prev[0]
+    ];
+    this.gyro = [2*dq[1]/dt*R2D, 2*dq[2]/dt*R2D, 2*dq[3]/dt*R2D];
+  }
+  /* Specific force in body frame — what an accelerometer reads. */
+  specificForce() {
+    const f = [this.acc[0], this.acc[1], this.acc[2] - G];
+    return nedToBody(f, this.q);
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════
+   Bench state
+   ══════════════════════════════════════════════════════════════ */
+const PAD_LAT = 375000000, PAD_LON = 1270000000;   // 37.5 N, 127.0 E
+const LAT_PER_M = 1 / M_PER_I7;
+
+const S = {
+  running: false, t: 0, mode: "STOW",
+  rocket: null,
+  txNoise: new GpsNoise(45), rxNoise: new GpsNoise(45),
+  inflight: [],                 // packets in the air (latency queue)
+  parser: new RkParser(0),
+  lastPkt: null, lastPktT: -1e9, lastRaw: null,
+  seq: 0, nextTx: 0,
+  gYaw: 0, gPitch: 0,           // virtual motor state (rate-limited)
+  haveDir: false, lastDirNed: [1, 0, 0],
+  txSent: 0, rxOk: 0, rxBad: 0, rxLost: 0,
+  errSum: 0, errN: 0, errMax: 0,
+  telem: null, telemRows: 0, telemRemOk: 0, injectNed: null,
+  remWindow: [], dxlRaw: null,
+  log: []
+};
+
+const CH = [
+  { id: "err",   name: "지향 오차",       unit: "°",  series: [["err", "accent"]] },
+  { id: "yaw",   name: "짐벌 yaw",        unit: "°",  series: [["cmdY", "accent"], ["truY", "truth"]] },
+  { id: "pitch", name: "짐벌 pitch",      unit: "°",  series: [["cmdP", "accent"], ["truP", "truth"]] },
+  { id: "rng",   name: "상대 거리",       unit: "m",  series: [["rngR", "raw"], ["rngT", "truth"]] },
+  { id: "north", name: "상대 North",      unit: "m",  series: [["nR", "raw"], ["nT", "truth"]] },
+  { id: "east",  name: "상대 East",       unit: "m",  series: [["eR", "raw"], ["eT", "truth"]] },
+  { id: "alt",   name: "로켓 AGL",        unit: "m",  series: [["altR", "raw"], ["altT", "truth"]] },
+  { id: "vel",   name: "로켓 속도 N/E/D", unit: "m/s",series: [["vN","accent"],["vE","truth"],["vD","raw"]] },
+  { id: "acc",   name: "로켓 가속도 |a|", unit: "m/s²",series: [["accM", "accent"]] },
+  { id: "gyr",   name: "로켓 각속도 |ω|", unit: "°/s",series: [["gyrM", "accent"]] },
+  { id: "link",  name: "수신율",          unit: "%",  series: [["link", "ok"]] },
+  { id: "att",   name: "페이로드 자세 Y/P/R", unit: "°", telem: true,
+    series: [["attY","accent"],["attP","truth"],["attR","raw"]] },
+  { id: "dxl",   name: "DXL 실제 위치 Y/P",  unit: "°", telem: true,
+    series: [["dxlY","accent"],["dxlP","truth"]] },
+  { id: "cur",   name: "DXL 전류 Y/P",       unit: "raw", telem: true,
+    series: [["curY","accent"],["curP","truth"]] },
+  { id: "chk",   name: "주입 검산 오차 (보드 vs 브라우저)", unit: "°", telem: true,
+    series: [["chk", "ok"]] }
+];
+const HIST = {};              // key -> array of {t, v}
+const HIST_S = 30;            // seconds retained
+CH.forEach(c => c.series.forEach(([k]) => HIST[k] = []));
+
+function push(key, t, v) {
+  if (!Number.isFinite(v)) return;
+  const a = HIST[key];
+  a.push({ t, v });
+  const cut = t - HIST_S;
+  let i = 0; while (i < a.length && a[i].t < cut) i++;
+  if (i > 0) a.splice(0, i);
+}
+
+/* ── UI plumbing ────────────────────────────────────────── */
+const $ = (id) => document.getElementById(id);
+const P = {};
+function bindRange(id, fmt) {
+  const el = $(id), out = $(id + "V");
+  const upd = () => { P[id] = parseFloat(el.value); if (out) out.textContent = fmt(P[id]); };
+  el.addEventListener("input", upd); upd();
+}
+function bindCheck(id) {
+  const el = $(id);
+  const upd = () => P[id] = el.checked;
+  el.addEventListener("change", upd); upd();
+}
+function bindNum(id) {
+  const el = $(id);
+  const upd = () => P[id] = parseFloat(el.value);
+  el.addEventListener("input", upd); upd();
+}
+
+bindRange("baseline", v => v + " m");
+bindRange("bearing", v => v + "°");
+bindRange("payYaw", v => v + "°");
+bindRange("spinRate", v => v + " °/s");
+bindRange("gpsWander", v => v.toFixed(1) + " m");
+bindRange("gpsWhite", v => v.toFixed(2) + " m");
+bindRange("mpRate", v => v.toFixed(1) + " /min");
+bindRange("fixDrop", v => v + " %");
+bindRange("txHz", v => v.toFixed(1) + " Hz");
+bindRange("lagMs", v => v + " ms");
+bindRange("jitMs", v => v + " ms");
+bindRange("lossPct", v => v + " %");
+bindRange("corruptPct", v => v + " %");
+bindRange("injBear", v => v + "°");
+bindRange("injRange", v => v + " m");
+bindRange("injAlt", v => v + " m");
+bindRange("injPeriod", v => v + " s");
+bindRange("injSweep", v => "±" + v + "°");
+bindRange("injPitch", v => v + "°");
+bindRange("baroBias", v => v.toFixed(1) + " m");
+bindRange("baroNoise", v => v.toFixed(1) + " m");
+bindRange("imuYawBias", v => v.toFixed(1) + "°");
+bindRange("imuNoise", v => v.toFixed(1) + "°");
+bindRange("speed", v => v.toFixed(2) + "×");
+["paySpin","zeroOnDrop","cfgForce","cfgLimits","cfgLag","cfgSharedAlt"].forEach(bindCheck);
+["cfgTimeout","cfgMinRange","cfgRate","pLat","pLon","pAlt"].forEach(bindNum);
+
+const PRESETS = {
+  bench:  { baseline: 5,   gpsWander: 2.5, gpsWhite: 0.8, mpRate: 6, fixDrop: 8,
+            zeroOnDrop: true, txHz: 5, lagMs: 150, jitMs: 60, lossPct: 8, corruptPct: 4,
+            baroNoise: 0.8, imuNoise: 0.5, cfgMinRange: 1, cfgForce: true,
+            cfgTimeout: 1000, paySpin: false },
+  field:  { baseline: 100, gpsWander: 2.0, gpsWhite: 0.6, mpRate: 1, fixDrop: 1,
+            zeroOnDrop: false, txHz: 5, lagMs: 150, jitMs: 40, lossPct: 2, corruptPct: 1,
+            baroNoise: 0.5, imuNoise: 0.3, cfgMinRange: 30, cfgForce: false,
+            cfgTimeout: 600, paySpin: false },
+  flight: { baseline: 300, gpsWander: 1.5, gpsWhite: 0.5, mpRate: 0.5, fixDrop: 1,
+            zeroOnDrop: false, txHz: 5, lagMs: 180, jitMs: 60, lossPct: 6, corruptPct: 3,
+            baroNoise: 1.0, imuNoise: 0.6, cfgMinRange: 30, cfgForce: false,
+            cfgTimeout: 600, paySpin: true, spinRate: 45 },
+  ideal:  { baseline: 300, gpsWander: 0, gpsWhite: 0, mpRate: 0, fixDrop: 0,
+            zeroOnDrop: false, txHz: 5, lagMs: 0, jitMs: 0, lossPct: 0, corruptPct: 0,
+            baroNoise: 0, baroBias: 0, imuNoise: 0, imuYawBias: 0,
+            cfgMinRange: 30, cfgForce: false, cfgTimeout: 600, paySpin: false }
+};
+document.querySelectorAll("[data-preset]").forEach(btn => {
+  btn.addEventListener("click", () => {
+    const p = PRESETS[btn.dataset.preset];
+    for (const [k, v] of Object.entries(p)) {
+      const el = $(k); if (!el) continue;
+      if (el.type === "checkbox") { el.checked = v; el.dispatchEvent(new Event("change")); }
+      else { el.value = v; el.dispatchEvent(new Event("input")); }
+    }
+    resetRun();
+  });
+});
+
+/* ── run control ────────────────────────────────────────── */
+function resetRun() {
+  S.t = 0; S.running = false; S.mode = "STOW";
+  S.rocket = new Rocket(84, P.bearing + 8);
+  S.inflight = []; S.parser = new RkParser(LEN58);
+  S.lastPkt = null; S.lastPktT = -1e9; S.lastRaw = null;
+  S.seq = 0; S.nextTx = 0; S.gYaw = 0; S.gPitch = 0;
+  S.haveDir = false; S.lastDirNed = [1, 0, 0];
+  S.txSent = S.rxOk = S.rxBad = S.rxLost = 0;
+  S.errSum = 0; S.errN = 0; S.errMax = 0; S.log = [];
+  S.telem = null; S.telemRows = 0; S.telemRemOk = 0;
+  Object.keys(HIST).forEach(k => HIST[k].length = 0);
+  track.length = 0;
+  ctrlAcc = 0;
+  $("run").textContent = "발사";
+}
+$("run").addEventListener("click", () => {
+  if (S.rocket && S.rocket.phase === "DOWN") resetRun();
+  S.running = !S.running;
+  $("run").textContent = S.running ? "일시정지" : "재개";
+});
+$("reset").addEventListener("click", resetRun);
+$("clear").addEventListener("click", () => {
+  Object.keys(HIST).forEach(k => HIST[k].length = 0);
+  S.errSum = 0; S.errN = 0; S.errMax = 0; S.log = [];
+});
+
+function sourceMode() { return $("src").value; }
+function isLive() { return sourceMode() !== "sim"; }
+function clearHistory() {
+  Object.keys(HIST).forEach(k => HIST[k].length = 0);
+  track.length = 0;
+  S.errSum = 0; S.errN = 0; S.errMax = 0; S.log = [];
+  S.telem = null; S.telemRows = 0; S.telemRemOk = 0;
+  S.mode = "STOW"; S.gYaw = 0; S.gPitch = 0;
+}
+$("src").addEventListener("change", () => {
+  // Leave no trace of the previous source on screen.
+  clearHistory();
+  const live = isLive();
+  $("simCtl").hidden = live; $("serCtl").hidden = !live;
+  $("cmdBar").hidden = sourceMode() !== "telem";
+  $("plen").closest(".ctl").hidden = sourceMode() !== "serial";
+  if (live) S.running = false;
+});
+
+/* ── payload pose ───────────────────────────────────────── */
+function payloadTrue() {
+  if (sourceMode() === "telem" && S.telem && S.telem.gpsValid) {
+    return { lat: S.telem.gpsLat, lon: S.telem.gpsLon,
+             alt: P.pAlt, n: 0, e: 0 };
+  }
+  if (isLive()) {
+    return { lat: Math.round(P.pLat * 1e7), lon: Math.round(P.pLon * 1e7),
+             alt: P.pAlt, n: 0, e: 0 };
+  }
+  // Placed at `baseline` metres from the pad, on the bearing opposite the
+  // launch azimuth so the rocket climbs away in front of the payload.
+  const br = (P.bearing + 180) * D2R;
+  const n = P.baseline * Math.cos(br), e = P.baseline * Math.sin(br);
+  const cosLat = Math.cos(PAD_LAT * 1e-7 * D2R);
+  return {
+    lat: Math.round(PAD_LAT + n * LAT_PER_M),
+    lon: Math.round(PAD_LON + e * LAT_PER_M / cosLat),
+    alt: 0, n, e
+  };
+}
+function payloadQuatTrue(t) {
+  const spin = P.paySpin ? (P.spinRate * t) % 360 : 0;
+  return eulerToQuat(P.payYaw + spin, 0, 0);
+}
+function payloadQuatMeasured(t) {
+  const spin = P.paySpin ? (P.spinRate * t) % 360 : 0;
+  return eulerToQuat(P.payYaw + spin + P.imuYawBias + P.imuNoise * gauss(),
+                     P.imuNoise * gauss(), P.imuNoise * gauss());
+}
+
+/* ── transmitter: build a real RK58 packet from rocket truth ── */
+function buildPacket(t) {
+  const r = S.rocket;
+  const noise = S.txNoise.step(1 / Math.max(P.txHz, 0.1),
+                               P.gpsWander, P.gpsWhite, P.mpRate);
+  const fixLost = rnd() < P.fixDrop / 100;
+  const cosLat = Math.cos(PAD_LAT * 1e-7 * D2R);
+  const nM = r.p[0] + noise[0], eM = r.p[1] + noise[1];
+  let lat = Math.round(PAD_LAT + nM * LAT_PER_M);
+  let lon = Math.round(PAD_LON + eM * LAT_PER_M / cosLat);
+  if (fixLost && P.zeroOnDrop) { lat = 0; lon = 0; }
+
+  const agl = r.agl() + P.baroBias + P.baroNoise * gauss();
+  const sf = r.specificForce();
+  return {
+    seq: S.seq++ & 0xff,
+    fixType: fixLost ? 0 : 3,
+    iTOW: Math.round(t * 1000) >>> 0,
+    lat_i7: lat, lon_i7: lon,
+    alt_mm: Math.round(agl * 1000),
+    velN_mms: Math.round(r.v[0] * 1000), velE_mms: Math.round(r.v[1] * 1000),
+    velD_mms: Math.round(r.v[2] * 1000),
+    imuFlags: 0x07, quatAcc: 3, imuAgeMs: Math.round(5 + rnd() * 10),
+    ax: sf[0], ay: sf[1], az: sf[2],
+    gx: r.gyro[0], gy: r.gyro[1], gz: r.gyro[2],
+    qw: r.q[0], qx: r.q[1], qy: r.q[2], qz: r.q[3]
+  };
+}
+
+/* ── receiver pipeline: mirrors tracker_app.cpp ─────────── */
+function controlTick(t, dt) {
+  const payT = payloadTrue();
+  const qTrue = payloadQuatTrue(t);
+  const qMeas = payloadQuatMeasured(t);
+
+  // Ground truth pointing, for scoring only.
+  let trueBody = null, truY = NaN, truP = NaN, rngT = NaN, nT = NaN, eT = NaN;
+  if (S.rocket) {
+    const nedT = [S.rocket.p[0] - payT.n, S.rocket.p[1] - payT.e,
+                  S.rocket.p[2] - (-payT.alt)];
+    nT = nedT[0]; eT = nedT[1];
+    rngT = Math.hypot(...nedT);
+    trueBody = nedToBody(nedT, qTrue);
+    const g = bodyToGimbal(trueBody); truY = g.yaw; truP = g.pitch;
+  }
+
+  const fresh = S.lastPkt && (t - S.lastPktT) * 1000 <= P.cfgTimeout;
+  let tracked = false, ned = null;
+
+  if (fresh) {
+    const pk = S.lastPkt;
+    const usable = (pk.fixType === 3 || pk.fixType === 4) || P.cfgForce;
+    if (usable) {
+      let lat = pk.lat_i7, lon = pk.lon_i7;
+      let aglM = pk.alt_mm / 1000;
+      if (P.cfgLag) {
+        // P + V*dt using the measured age of this sample.
+        const age = t - S.lastPktT + P.lagMs / 1000;
+        const cosLat = Math.cos(payT.lat * 1e-7 * D2R);
+        lat += Math.round(pk.velN_mms / 1000 * age * LAT_PER_M);
+        lon += Math.round(pk.velE_mms / 1000 * age * LAT_PER_M / cosLat);
+        aglM += -pk.velD_mms / 1000 * age;
+      }
+      ned = relativeNed(payT.lat, payT.lon, lat, lon, aglM, payT.alt, P.cfgSharedAlt);
+      const range = Math.hypot(...ned);
+      if (range >= P.cfgMinRange && Number.isFinite(range)) {
+        const body = nedToBody(ned, qMeas);
+        const g = bodyToGimbal(body);
+        S.lastDirNed = ned.map(c => c / range); S.haveDir = true;
+        S.mode = "TRACK"; tracked = true;
+        driveMotors(g.yaw, g.pitch, dt);
+      }
+    }
+  }
+  if (!tracked) {
+    if (S.haveDir) {
+      const body = nedToBody(S.lastDirNed, qMeas);
+      const g = bodyToGimbal(body);
+      S.mode = "HOLD"; driveMotors(g.yaw, g.pitch, dt);
+    } else {
+      S.mode = "STOW"; driveMotors(0, 0, dt);
+    }
+  }
+
+  // Score: angle between where the virtual motors point and the truth.
+  let err = NaN;
+  if (trueBody) err = angleBetween(gimbalToUnit(S.gYaw, S.gPitch), trueBody);
+  if (Number.isFinite(err)) {
+    S.errSum += err * err; S.errN++; S.errMax = Math.max(S.errMax, err);
+  }
+
+  const rngR = ned ? Math.hypot(...ned) : NaN;
+  push("err", t, err);
+  push("cmdY", t, S.gYaw); push("truY", t, truY);
+  push("cmdP", t, S.gPitch); push("truP", t, truP);
+  push("rngR", t, rngR); push("rngT", t, rngT);
+  push("nR", t, ned ? ned[0] : NaN); push("nT", t, nT);
+  push("eR", t, ned ? ned[1] : NaN); push("eT", t, eT);
+  if (S.lastPkt) {
+    push("altR", t, S.lastPkt.alt_mm / 1000);
+    push("vN", t, S.lastPkt.velN_mms / 1000);
+    push("vE", t, S.lastPkt.velE_mms / 1000);
+    push("vD", t, S.lastPkt.velD_mms / 1000);
+    push("accM", t, Math.hypot(S.lastPkt.ax, S.lastPkt.ay, S.lastPkt.az));
+    push("gyrM", t, Math.hypot(S.lastPkt.gx, S.lastPkt.gy, S.lastPkt.gz));
+  }
+  if (S.rocket) push("altT", t, S.rocket.agl());
+  push("link", t, S.txSent ? 100 * S.rxOk / S.txSent : NaN);
+
+  S.log.push([t.toFixed(3), S.mode, S.gYaw.toFixed(3), S.gPitch.toFixed(3),
+              truY.toFixed(3), truP.toFixed(3), err.toFixed(4),
+              rngR.toFixed(2), rngT.toFixed(2), S.rxOk, S.rxBad, S.rxLost]);
+  if (S.log.length > 200000) S.log.splice(0, 50000);
+}
+
+/* Virtual motors — same clamp + rate limit as gimbal_controller.cpp */
+function wrapDeg(a) { while (a > 180) a -= 360; while (a < -180) a += 360; return a; }
+function driveMotors(yawDeg, pitchDeg, dt) {
+  const maxStep = P.cfgRate * dt;
+  let y = wrapDeg(yawDeg), p = pitchDeg;
+  if (P.cfgLimits) {
+    y = Math.max(-170, Math.min(170, y));
+    p = Math.max(-10, Math.min(90, p));
+  }
+  const stepTo = (target, cur) => {
+    const d = target - cur;
+    return Math.abs(d) <= maxStep ? target : cur + Math.sign(d) * maxStep;
+  };
+  S.gYaw = stepTo(y, S.gYaw);
+  S.gPitch = stepTo(p, S.gPitch);
+}
+
+/* ── simulation stepping ────────────────────────────────── */
+const PHYS_DT = 0.005, CTRL_DT = 0.02;
+let ctrlAcc = 0;
+
+function advance(dt) {
+  const r = S.rocket;
+  let left = dt;
+  while (left > 1e-9) {
+    const h = Math.min(PHYS_DT, left);
+    r.step(h, 3.0, 1.5);           // light wind
+    S.t += h; left -= h;
+
+    // Transmit
+    if (S.t >= S.nextTx) {
+      S.nextTx += 1 / Math.max(P.txHz, 0.1);
+      S.txSent++;
+      // The sequence number is consumed whether or not the packet survives
+      // the air, so the receiver can actually count the gap.
+      const bytes = encodeRK(buildPacket(S.t));
+      if (rnd() >= P.lossPct / 100) {
+        if (P.corruptPct > 0 && rnd() < P.corruptPct / 100) {
+          bytes[4 + Math.floor(rnd() * (PKT_LEN - 6))] ^= 1 << Math.floor(rnd() * 8);
+        }
+        const lag = Math.max(0, (P.lagMs + P.jitMs * (rnd() * 2 - 1)) / 1000);
+        S.inflight.push({ at: S.t + lag, bytes });
+      }
+    }
+    // Deliver
+    while (S.inflight.length && S.inflight[0].at <= S.t) {
+      const p = S.inflight.shift();
+      const out = {};
+      for (const b of p.bytes) if (S.parser.feed(b, out)) acceptPacket(out.pkt, S.t);
+    }
+    // Control
+    ctrlAcc += h;
+    while (ctrlAcc >= CTRL_DT) { ctrlAcc -= CTRL_DT; controlTick(S.t, CTRL_DT); }
+  }
+}
+function acceptPacket(pkt, t) {
+  S.lastPkt = pkt; S.lastPktT = t; S.lastRaw = pkt.bytes;
+  S.rxOk = S.parser.ok; S.rxBad = S.parser.bad; S.rxLost = S.parser.lost;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   OpenRB telemetry line — the 46 columns written by sd_logger.cpp.
+   Mirroring that same line to USB is all the firmware needs to do.
+   ══════════════════════════════════════════════════════════════ */
+const TELEM_COLS = 46;
+const T = {                     // column index -> field
+  t_ms:0, mode:1, imu_valid:2, qw:3, qx:4, qy:5, qz:6,
+  yaw:7, pitch:8, roll:9,
+  baro_valid:10, pressure:11, temp:12,
+  gps_valid:13, gps_itow:14, gps_lat:15, gps_lon:16, gps_hmsl:17,
+  gps_fix:18, gps_sv:19,
+  rem_valid:20, rem_seq:21, rem_ms:22, rem_lat:23, rem_lon:24,
+  rem_agl:25, rem_vn:26, rem_ve:27, rem_vd:28, rem_fix:29,
+  rel_n:30, rel_e:31, rel_d:32, range:33, tgt_yaw:34, tgt_pitch:35,
+  cmd_yaw:36, cmd_pitch:37, pos_yaw:38, pos_pitch:39,
+  cur_y:40, cur_p:41, temp_y:42, temp_p:43, limit:44, torque:45
+};
+const MODE_NAME = ["STOW", "TRACK", "HOLD", "FAULT", "MANUAL"];
+
+function parseTelemLine(line) {
+  const c = line.split(",");
+  if (c.length < TELEM_COLS) return null;
+  const n = (k) => parseFloat(c[T[k]]);
+  const i = (k) => parseInt(c[T[k]], 10);
+  // The firmware emits the column header once. Reject it — and any partial
+  // line from attaching mid-row — by requiring a numeric timestamp.
+  if (!Number.isFinite(n("t_ms")) || !Number.isFinite(n("cmd_yaw"))) return null;
+  return {
+    tMs: i("t_ms"), mode: i("mode"),
+    imuValid: i("imu_valid") === 1,
+    q: [n("qw"), n("qx"), n("qy"), n("qz")],
+    yaw: n("yaw"), pitch: n("pitch"), roll: n("roll"),
+    gpsValid: i("gps_valid") === 1, gpsFix: i("gps_fix"), gpsSv: i("gps_sv"),
+    gpsLat: i("gps_lat"), gpsLon: i("gps_lon"),
+    remValid: i("rem_valid") === 1, remSeq: i("rem_seq"), remFix: i("rem_fix"),
+    remLat: i("rem_lat"), remLon: i("rem_lon"), remAgl: n("rem_agl"),
+    vN: n("rem_vn"), vE: n("rem_ve"), vD: n("rem_vd"),
+    relN: n("rel_n"), relE: n("rel_e"), relD: n("rel_d"), range: n("range"),
+    tgtYaw: n("tgt_yaw"), tgtPitch: n("tgt_pitch"),
+    cmdYaw: n("cmd_yaw"), cmdPitch: n("cmd_pitch"),
+    posYaw: n("pos_yaw"), posPitch: n("pos_pitch"),
+    curY: n("cur_y"), curP: n("cur_p"),
+    tempY: n("temp_y"), tempP: n("temp_p"),
+    limit: i("limit") === 1, torque: i("torque") === 1
+  };
+}
+
+/* Drive every display from one telemetry row. The virtual motors follow the
+   board's own command, so the browser shows what the hardware is doing. */
+function applyTelem(r, t) {
+  S.telem = r;
+  S.mode = MODE_NAME[r.mode] || "?";
+  S.gYaw = r.cmdYaw; S.gPitch = r.cmdPitch;
+  S.telemRows++;
+  if (r.remValid) S.telemRemOk++;
+
+  const err = angleBetween(gimbalToUnit(r.cmdYaw, r.cmdPitch),
+                           gimbalToUnit(r.tgtYaw, r.tgtPitch));
+  push("err", t, err);
+  push("cmdY", t, r.cmdYaw); push("truY", t, r.tgtYaw);
+  push("cmdP", t, r.cmdPitch); push("truP", t, r.tgtPitch);
+  push("rngR", t, r.range);
+  push("nR", t, r.relN); push("eR", t, r.relE);
+  push("altR", t, r.remAgl);
+  push("vN", t, r.vN); push("vE", t, r.vE); push("vD", t, r.vD);
+  push("attY", t, r.yaw); push("attP", t, r.pitch); push("attR", t, r.roll);
+  push("dxlY", t, r.posYaw); push("dxlP", t, r.posPitch);
+  push("curY", t, r.curY); push("curP", t, r.curP);
+  // Rolling window, not a running total: a cumulative ratio keeps sagging
+  // long after injection stops and stops describing the link at all.
+  S.remWindow.push(r.remValid ? 1 : 0);
+  if (S.remWindow.length > 100) S.remWindow.shift();   // 10 s at 10 Hz
+  const w = S.remWindow;
+  push("link", t, 100 * w.reduce((a, b) => a + b, 0) / w.length);
+
+  // Independent check, computed only from values inside this one row: take the
+  // board's own local fix, remote fix and attitude, redo the geometry here and
+  // compare with the angles the board reported. Using one row removes the
+  // timing skew that comparing against the last injected value would add, so
+  // what is left is genuine disagreement between the two implementations.
+  // Only while the board is actually tracking. In HOLD it reports the frozen
+  // direction instead of the bearing to the remote, so comparing the two
+  // would flag a mode change as a geometry error.
+  if (MODE_NAME[r.mode] === "TRACK" &&
+      r.imuValid && r.gpsValid && r.remValid && r.range > 0) {
+    const ned = relativeNed(r.gpsLat, r.gpsLon, r.remLat, r.remLon, r.remAgl,
+                            0, true);
+    const expect = bodyToGimbal(nedToBody(ned, r.q));
+    push("chk", t, angleBetween(gimbalToUnit(expect.yaw, expect.pitch),
+                                gimbalToUnit(r.tgtYaw, r.tgtPitch)));
+  }
+
+  if (Number.isFinite(err)) { S.errSum += err*err; S.errN++; S.errMax = Math.max(S.errMax, err); }
+  // Attitude belongs in the log: drift and glitch analysis are impossible
+  // without it, and the gimbal angles alone cannot separate the two.
+  S.log.push([t.toFixed(3), S.mode,
+              r.yaw.toFixed(3), r.pitch.toFixed(3), r.roll.toFixed(3),
+              r.q[0].toFixed(6), r.q[1].toFixed(6), r.q[2].toFixed(6), r.q[3].toFixed(6),
+              r.cmdYaw.toFixed(3), r.cmdPitch.toFixed(3),
+              r.tgtYaw.toFixed(3), r.tgtPitch.toFixed(3), err.toFixed(4),
+              r.posYaw.toFixed(3), r.posPitch.toFixed(3),
+              r.range.toFixed(2), r.relN.toFixed(2), r.relE.toFixed(2), r.relD.toFixed(2),
+              r.gpsValid ? 1 : 0, r.gpsFix, r.gpsSv, r.gpsLat, r.gpsLon,
+              r.remValid ? 1 : 0, r.remSeq, r.remLat, r.remLon, r.remAgl.toFixed(3),
+              r.curY, r.curP, r.tempY, r.tempP,
+              r.limit ? 1 : 0, r.torque ? 1 : 0]);
+  if (S.log.length > 200000) S.log.splice(0, 50000);
+}
+
+/* ══════════════════════════════════════════════════════════════
+   Virtual rocket injection.
+   The board keeps using its own IMU, barometer and GPS; only the remote
+   target is synthesised here and pushed over USB as R commands. That
+   exercises the real compensation path and the real motors.
+   ══════════════════════════════════════════════════════════════ */
+let injectTimer = null, injectRocket = null, injectT = 0, injectSent = 0;
+let injectOrigin = null, injectPayload = null;
+
+function injectionRunning() { return injectTimer !== null; }
+
+function startInjection() {
+  const r = S.telem;
+  if (!r || !r.gpsValid) {
+    logLine("! 주입 불가: 보드의 로컬 GPS fix가 필요합니다");
+    return;
+  }
+  // Launch pad sits `baseline` metres from the payload's real position.
+  const br = (P.bearing + 180) * D2R;
+  const cosLat = Math.cos(r.gpsLat * 1e-7 * D2R);
+  injectPayload = { lat: r.gpsLat, lon: r.gpsLon, cosLat };
+  injectOrigin = {
+    lat: r.gpsLat - Math.round(P.baseline * Math.cos(br) / M_PER_I7),
+    lon: r.gpsLon - Math.round(P.baseline * Math.sin(br) / (M_PER_I7 * cosLat)),
+    cosLat
+  };
+  injectRocket = new Rocket(84, P.bearing + 8);
+  injectT = 0; injectSent = 0;
+  const dt = 1 / Math.max(P.txHz, 0.5);
+
+  injectTimer = setInterval(() => {
+    injectT += dt;
+    const mode = $("injMode").value;
+    let n, e, agl, vN = 0, vE = 0, vD = 0;
+
+    if (mode === "flight") {
+      let left = dt;
+      while (left > 1e-9) {
+        const h = Math.min(0.005, left);
+        injectRocket.step(h, 3.0, 1.5);
+        left -= h;
+      }
+      n = injectRocket.p[0]; e = injectRocket.p[1]; agl = injectRocket.agl();
+      vN = injectRocket.v[0]; vE = injectRocket.v[1]; vD = injectRocket.v[2];
+    } else {
+      // Bearings chosen so the expected gimbal motion is obvious by eye.
+      const period = Math.max(P.injPeriod, 1);
+      const omega = 2 * Math.PI / period;
+      let bearingDeg, rateDegS = 0, sectorGimbal = 0;
+      if (mode === "orbit") {
+        bearingDeg = P.injBear + 360 * (injectT / period);
+        rateDegS = 360 / period;
+      } else if (mode === "sector") {
+        sectorGimbal = P.injSweep * Math.sin(omega * injectT);
+        bearingDeg = null;   // placed in gimbal axes below, not by bearing
+      } else {
+        bearingDeg = P.injBear;
+      }
+      if (bearingDeg === null) {
+        // Build the target from the angles the gimbal should end up at and
+        // rotate them out through the payload's full attitude. Compensating
+        // heading alone would let roll and pitch push the gimbal past the
+        // amplitude, which is exactly what a travel-limited axis must avoid.
+        const q = (S.telem && S.telem.imuValid) ? S.telem.q : [1, 0, 0, 0];
+        const dir = bodyToNed(gimbalToUnit(sectorGimbal, P.injPitch), q);
+        n = P.injRange * dir[0];
+        e = P.injRange * dir[1];
+        agl = -P.injRange * dir[2];
+      } else {
+        const bearing = bearingDeg * D2R;
+        n = P.injRange * Math.cos(bearing);
+        e = P.injRange * Math.sin(bearing);
+        agl = P.injAlt;
+        if (rateDegS !== 0) {
+          const w = rateDegS * D2R;
+          vN = -P.injRange * w * Math.sin(bearing);
+          vE = P.injRange * w * Math.cos(bearing);
+        }
+      }
+    }
+
+    // Fixed and orbit patterns are placed around the payload itself; the
+    // flight pattern starts from the pad established at injection start.
+    const base = (mode === "flight") ? injectOrigin : injectPayload;
+    const lat = base.lat + Math.round(n / M_PER_I7);
+    const lon = base.lon + Math.round(e / (M_PER_I7 * base.cosLat));
+    const mm = (v) => Math.round(v * 1000);
+    sendCmd("R " + lat + " " + lon + " " + mm(agl) + " " +
+            mm(vN) + " " + mm(vE) + " " + mm(vD) + " 3");
+
+    // Keep the truth vector so the board's own answer can be checked.
+    S.injectNed = [n + (base.lat - injectPayload.lat) * M_PER_I7,
+                   e + (base.lon - injectPayload.lon) * M_PER_I7 * base.cosLat,
+                   -agl];
+    injectSent++;
+    if (mode === "flight" && injectRocket.phase === "DOWN") {
+      logLine("# 가상 로켓 착지"); stopInjection();
+    }
+  }, dt * 1000);
+  logLine("# 주입 시작 — " + $("injMode").selectedOptions[0].textContent);
+}
+
+function stopInjection() {
+  if (injectTimer) clearInterval(injectTimer);
+  injectTimer = null;
+  $("inject").classList.remove("crit");
+  $("inject").textContent = "가상 로켓 주입 시작";
+}
+
+/* ── Web Serial ─────────────────────────────────────────── */
+let port = null, reader = null, writer = null, keepReading = false, textBuf = "";
+function logLine(s) {
+  const el = $("log");
+  el.textContent = (el.textContent + "\n" + s).split("\n").slice(-40).join("\n");
+  el.scrollTop = el.scrollHeight;
+}
+async function sendCmd(cmd) {
+  if (!port) { logLine("! 보드가 연결되지 않았습니다"); return; }
+  if (!writer) { logLine("! 쓰기 채널이 없습니다 — 연결을 해제하고 다시 연결하세요"); return; }
+  try {
+    await writer.write(new TextEncoder().encode(cmd + "\n"));
+    logLine("> " + cmd);
+  } catch (e) {
+    logLine("! 전송 실패: " + e.message);
+  }
+}
+document.querySelectorAll("[data-cmd]").forEach(b =>
+  b.addEventListener("click", () => sendCmd(b.dataset.cmd)));
+
+function manualCmd() {
+  return "M " + ($("mYaw").value || 0) + " " + ($("mPitch").value || 0);
+}
+$("mSend").addEventListener("click", () => sendCmd(manualCmd()));
+$("inject").addEventListener("click", () => {
+  if (injectionRunning()) { stopInjection(); logLine("# 주입 중지"); return; }
+  startInjection();
+  if (injectionRunning()) {
+    $("inject").classList.add("crit");
+    $("inject").textContent = "주입 중지 (비행 " + Math.round(injectT) + "s)";
+  }
+});
+
+// The firmware releases a manual angle after MANUAL_TIMEOUT_MS. Repeating the
+// command keeps the gimbal there while this toggle is on.
+let manualHold = null;
+$("mHold").addEventListener("click", () => {
+  if (manualHold) {
+    clearInterval(manualHold); manualHold = null;
+    $("mHold").classList.remove("primary");
+    $("mHold").textContent = "계속 유지";
+    logLine("# 수동 유지 해제");
+  } else {
+    sendCmd(manualCmd());
+    manualHold = setInterval(() => sendCmd(manualCmd()), 2000);
+    $("mHold").classList.add("primary");
+    $("mHold").textContent = "유지 중지";
+    logLine("# 수동 유지 시작 (2초마다 재전송)");
+  }
+});
+$("connect").addEventListener("click", async () => {
+  if (!("serial" in navigator)) {
+    $("serNote").className = "note crit";
+    $("serNote").textContent = "이 브라우저는 Web Serial을 지원하지 않습니다. Chrome 또는 Edge를 사용하세요.";
+    return;
+  }
+  try {
+    port = await navigator.serial.requestPort();
+    await port.open({ baudRate: parseInt($("baud").value, 10) });
+    keepReading = true;
+    if (port.writable) writer = port.writable.getWriter();
+    $("connect").disabled = true; $("disconnect").disabled = false;
+    $("serNote").className = "note"; $("serNote").textContent = "연결됨. 패킷 수신 대기 중…";
+    S.t = 0; S.parser = new RkParser(parseInt($("plen").value, 10));
+    readLoop();
+    // The firmware keeps the CSV stream off by default so a serial monitor
+    // stays readable. Ask for it here rather than making every user send L1.
+    if (sourceMode() === "telem") setTimeout(() => sendCmd("L1"), 200);
+  } catch (e) {
+    $("serNote").className = "note crit";
+    $("serNote").textContent = "연결 실패: " + e.message;
+  }
+});
+$("plen").addEventListener("change", () => {
+  S.parser = new RkParser(parseInt($("plen").value, 10));
+});
+$("disconnect").addEventListener("click", async () => {
+  stopInjection();
+  keepReading = false;
+  try { if (reader) await reader.cancel(); } catch (e) { /* already closed */ }
+  try { if (writer) { writer.releaseLock(); } } catch (e) { /* already released */ }
+  try { if (port) await port.close(); } catch (e) { /* already closed */ }
+  port = null; reader = null; writer = null;
+  $("connect").disabled = false; $("disconnect").disabled = true;
+  $("serNote").className = "note"; $("serNote").textContent = "해제됨.";
+});
+async function readLoop() {
+  const hexMode = () => sourceMode() === "telem" || $("frame").value === "hex";
+  const dec = new TextDecoder();
+  while (port && port.readable && keepReading) {
+    reader = port.readable.getReader();
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        if (!value) continue;
+        if (hexMode()) {
+          textBuf += dec.decode(value, { stream: true });
+          let nl;
+          while ((nl = textBuf.indexOf("\n")) >= 0) {
+            const line = textBuf.slice(0, nl); textBuf = textBuf.slice(nl + 1);
+            if (sourceMode() === "telem") {
+              if (line.startsWith("#")) {
+                // The raw servo angles appear only in the status line, and
+                // they are what the horns get aligned against.
+                const m = line.match(/dxl_raw=(-?[\d.]+),(-?[\d.]+)/);
+                if (m) S.dxlRaw = [parseFloat(m[1]), parseFloat(m[2])];
+                logLine(line);
+                continue;
+              }
+              const row = parseTelemLine(line);
+              if (row) applyTelem(row, S.t);
+              continue;
+            }
+            const hx = line.match(/[0-9a-fA-F]{2}/g);
+            if (!hx || hx.length < LEN34) continue;
+            const out = {};
+            for (const h of hx) if (S.parser.feed(parseInt(h, 16), out)) acceptPacket(out.pkt, S.t);
+          }
+          if (textBuf.length > 8192) textBuf = textBuf.slice(-1024);
+        } else {
+          const out = {};
+          for (const b of value) if (S.parser.feed(b, out)) acceptPacket(out.pkt, S.t);
+        }
+      }
+    } catch (e) {
+      $("serNote").className = "note warn";
+      $("serNote").textContent = "읽기 중단: " + e.message;
+    } finally { reader.releaseLock(); }
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════
+   Rendering
+   ══════════════════════════════════════════════════════════════ */
+function css(name) { return getComputedStyle(document.documentElement).getPropertyValue("--" + name).trim(); }
+function fit(cv) {
+  const dpr = window.devicePixelRatio || 1;
+  // Latch the CSS height once. Assigning canvas.height also rewrites the
+  // height attribute, so reading it back each frame would multiply by the
+  // device pixel ratio again and again until allocation fails.
+  if (!cv.dataset.h) cv.dataset.h = cv.getAttribute("height") || "200";
+  const h = parseInt(cv.dataset.h, 10);
+  const w = Math.max(1, Math.round(cv.clientWidth));
+  const bw = Math.round(w * dpr), bh = Math.round(h * dpr);
+  if (cv.width !== bw || cv.height !== bh) {
+    cv.width = bw; cv.height = bh;
+    cv.style.height = h + "px";
+  }
+  const g = cv.getContext("2d");
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return { g, w, h };
+}
+
+const track = [];
+function drawPlan() {
+  const { g, w, h } = fit($("plan"));
+  g.clearRect(0, 0, w, h);
+  const pay = payloadTrue();
+  const sim = sourceMode() === "sim";
+  // In live mode the board already reports the relative vector, so the
+  // payload sits at the origin and the target is that vector.
+  const tgt = sim ? (S.rocket ? [S.rocket.p[0], S.rocket.p[1]] : null)
+                  : (S.telem && S.telem.range > 0
+                       ? [pay.n + S.telem.relN, pay.e + S.telem.relE] : null);
+  const pts = [[pay.n, pay.e]];
+  if (tgt) pts.push(tgt);
+  track.forEach(p => pts.push(p));
+  let maxR = 20;
+  for (const [n, e] of pts) maxR = Math.max(maxR, Math.hypot(n - pay.n, e - pay.e));
+  const R = maxR * 1.25;
+  const cx = w / 2, cy = h / 2, sc = Math.min(w, h) / 2 / R * 0.92;
+  const X = (n, e) => cx + (e - pay.e) * sc;
+  const Y = (n, e) => cy - (n - pay.n) * sc;
+
+  // range rings
+  g.strokeStyle = css("grid"); g.fillStyle = css("ink-faint");
+  g.font = "10px ui-monospace, monospace"; g.lineWidth = 1;
+  const stepR = Math.pow(10, Math.floor(Math.log10(R))) * (R / Math.pow(10, Math.floor(Math.log10(R))) > 5 ? 2 : 1);
+  for (let r = stepR; r <= R; r += stepR) {
+    g.beginPath(); g.arc(cx, cy, r * sc, 0, Math.PI * 2); g.stroke();
+    g.fillText(r >= 1000 ? (r / 1000) + "km" : r + "m", cx + 3, cy - r * sc - 2);
+  }
+  g.beginPath(); g.moveTo(cx, 0); g.lineTo(cx, h); g.moveTo(0, cy); g.lineTo(w, cy); g.stroke();
+  g.fillStyle = css("ink-faint"); g.fillText("N", cx + 4, 12); g.fillText("E", w - 12, cy - 4);
+
+  // rocket track
+  if (track.length > 1) {
+    g.strokeStyle = css("truth"); g.globalAlpha = .45; g.lineWidth = 1.5;
+    g.beginPath(); track.forEach(([n, e], i) => i ? g.lineTo(X(n, e), Y(n, e)) : g.moveTo(X(n, e), Y(n, e)));
+    g.stroke(); g.globalAlpha = 1;
+  }
+  // pointing rays
+  const qT = payloadQuatTrue(S.t);
+  const cmdNed = bodyToNed(gimbalToUnit(S.gYaw, S.gPitch), qT);
+  const L = Math.min(w, h) * 0.46;
+  g.strokeStyle = css("accent"); g.lineWidth = 2;
+  g.beginPath(); g.moveTo(cx, cy);
+  g.lineTo(cx + cmdNed[1] * L, cy - cmdNed[0] * L); g.stroke();
+
+  if (tgt) {
+    g.fillStyle = css("truth");
+    g.beginPath(); g.arc(X(tgt[0], tgt[1]), Y(tgt[0], tgt[1]), 4.5, 0, Math.PI * 2); g.fill();
+  }
+  if (sim && S.rocket) {
+    // raw received position
+    if (S.lastPkt && S.lastPkt.lat_i7 !== 0) {
+      const rn = (S.lastPkt.lat_i7 - PAD_LAT) * M_PER_I7;
+      const re = (S.lastPkt.lon_i7 - PAD_LON) * M_PER_I7 * Math.cos(PAD_LAT * 1e-7 * D2R);
+      g.fillStyle = css("raw"); g.globalAlpha = .85;
+      g.beginPath(); g.arc(X(rn, re), Y(rn, re), 3, 0, Math.PI * 2); g.fill();
+      g.globalAlpha = 1;
+    }
+  }
+  // payload
+  g.fillStyle = css("ink");
+  g.beginPath(); g.arc(cx, cy, 4, 0, Math.PI * 2); g.fill();
+  g.strokeStyle = css("ink-faint"); g.lineWidth = 1;
+  g.beginPath(); g.arc(cx, cy, 8, 0, Math.PI * 2); g.stroke();
+}
+
+function drawGimbal() {
+  const { g, w, h } = fit($("gimbal"));
+  g.clearRect(0, 0, w, h);
+  const cx = w / 2, cy = h / 2 + 10, sc = Math.min(w, h) * 0.34;
+  // isometric projection of NED-ish body axes
+  const proj = (v) => {
+    const [x, y, z] = v;                       // fwd, right, down
+    return [cx + (y * 0.87 + x * 0.5) * sc, cy + (z * 0.8 - x * 0.42 + y * 0.24) * sc];
+  };
+  // base disc
+  g.strokeStyle = css("grid"); g.lineWidth = 1;
+  for (let r = 0.35; r <= 1.05; r += 0.35) {
+    g.beginPath();
+    for (let a = 0; a <= 360; a += 6) {
+      const p = proj([r * Math.cos(a * D2R), r * Math.sin(a * D2R), 0]);
+      a ? g.lineTo(p[0], p[1]) : g.moveTo(p[0], p[1]);
+    }
+    g.closePath(); g.stroke();
+  }
+  // axes
+  const axis = (v, label, col) => {
+    const o = proj([0, 0, 0]), p = proj(v);
+    g.strokeStyle = col; g.lineWidth = 1; g.setLineDash([3, 3]);
+    g.beginPath(); g.moveTo(o[0], o[1]); g.lineTo(p[0], p[1]); g.stroke();
+    g.setLineDash([]); g.fillStyle = col; g.font = "10px ui-monospace, monospace";
+    g.fillText(label, p[0] + 3, p[1]);
+  };
+  axis([1.15, 0, 0], "X 전방", css("ink-faint"));
+  axis([0, 1.15, 0], "Y 우", css("ink-faint"));
+  axis([0, 0, 1.05], "Z 하", css("ink-faint"));
+
+  const ray = (yaw, pitch, col, width) => {
+    const u = gimbalToUnit(yaw, pitch);
+    const o = proj([0, 0, 0]), p = proj(u.map(c => c * 1.0));
+    g.strokeStyle = col; g.lineWidth = width; g.lineCap = "round";
+    g.beginPath(); g.moveTo(o[0], o[1]); g.lineTo(p[0], p[1]); g.stroke();
+    g.fillStyle = col;
+    g.beginPath(); g.arc(p[0], p[1], width + 1, 0, Math.PI * 2); g.fill();
+  };
+  // yaw ring indicator
+  g.strokeStyle = css("accent"); g.globalAlpha = .35; g.lineWidth = 3;
+  g.beginPath();
+  for (let a = 0; a <= Math.abs(S.gYaw); a += 3) {
+    const s = Math.sign(S.gYaw) * a;
+    const p = proj([0.7 * Math.cos(s * D2R), 0.7 * Math.sin(s * D2R), 0]);
+    a ? g.lineTo(p[0], p[1]) : g.moveTo(p[0], p[1]);
+  }
+  g.stroke(); g.globalAlpha = 1;
+
+  const payT = payloadTrue();
+  if (sourceMode() === "sim" && S.rocket) {
+    const nedT = [S.rocket.p[0] - payT.n, S.rocket.p[1] - payT.e, S.rocket.p[2] + payT.alt];
+    const tb = nedToBody(nedT, payloadQuatTrue(S.t));
+    const gt = bodyToGimbal(tb);
+    ray(gt.yaw, gt.pitch, css("truth"), 2);
+  } else if (S.telem && S.telem.range > 0) {
+    ray(S.telem.tgtYaw, S.telem.tgtPitch, css("truth"), 2);
+  }
+  ray(S.gYaw, S.gPitch, css("accent"), 3);
+
+  g.fillStyle = css("ink"); g.font = "12px ui-monospace, monospace";
+  g.fillText("yaw " + S.gYaw.toFixed(1) + "°   pitch " + S.gPitch.toFixed(1) + "°", 10, 18);
+}
+
+/* strip charts */
+let stripsBuilt = false;
+function buildStrips() {
+  const host = $("charts");
+  CH.forEach(c => {
+    const d = document.createElement("div"); d.className = "strip";
+    d.innerHTML = '<div class="head"><span class="name">' + c.name +
+      '</span><span class="read" id="rd_' + c.id + '">—</span></div>' +
+      '<canvas id="cv_' + c.id + '" height="58"></canvas>';
+    host.appendChild(d);
+  });
+  stripsBuilt = true;
+}
+function drawStrips() {
+  const now = S.t;
+  for (const c of CH) {
+    const { g, w, h } = fit($("cv_" + c.id));
+    g.clearRect(0, 0, w, h);
+    let lo = Infinity, hi = -Infinity, any = false;
+    for (const [k] of c.series) for (const s of HIST[k]) { any = true; if (s.v < lo) lo = s.v; if (s.v > hi) hi = s.v; }
+    if (!any) { g.fillStyle = css("ink-faint"); g.font = "10px ui-monospace, monospace";
+                g.fillText("데이터 없음", 4, h / 2 + 3); continue; }
+    if (hi - lo < 1e-6) { hi += 0.5; lo -= 0.5; }
+    const pad = (hi - lo) * 0.12; lo -= pad; hi += pad;
+    const X = (t) => w * (1 - (now - t) / HIST_S);
+    const Y = (v) => h - (v - lo) / (hi - lo) * h;
+
+    g.strokeStyle = css("grid"); g.lineWidth = 1;
+    g.beginPath(); g.moveTo(0, Y(lo + (hi - lo) / 2)); g.lineTo(w, Y(lo + (hi - lo) / 2)); g.stroke();
+
+    const reads = [];
+    for (const [k, col] of c.series) {
+      const a = HIST[k]; if (!a.length) continue;
+      g.strokeStyle = css(col); g.lineWidth = 1.4; g.beginPath();
+      let started = false;
+      for (const s of a) {
+        const x = X(s.t), y = Y(s.v);
+        if (!started) { g.moveTo(x, y); started = true; } else g.lineTo(x, y);
+      }
+      g.stroke();
+      const last = a[a.length - 1];
+      g.fillStyle = css(col);
+      g.beginPath(); g.arc(X(last.t), Y(last.v), 2, 0, Math.PI * 2); g.fill();
+      reads.push('<span style="color:' + css(col) + '">' + fmt(last.v) + "</span>");
+    }
+    g.fillStyle = css("ink-faint"); g.font = "9px ui-monospace, monospace";
+    g.fillText(fmt(hi), 3, 9); g.fillText(fmt(lo), 3, h - 3);
+    $("rd_" + c.id).innerHTML = reads.join(" / ") + ' <span style="color:var(--ink-faint)">' + c.unit + "</span>";
+  }
+}
+function fmt(v) {
+  if (!Number.isFinite(v)) return "—";
+  const a = Math.abs(v);
+  return a >= 1000 ? v.toFixed(0) : a >= 100 ? v.toFixed(1) : a >= 1 ? v.toFixed(2) : v.toFixed(3);
+}
+
+function drawBanner() {
+  const el = $("srcBanner"), mode = sourceMode();
+  let cls, what, how;
+  if (mode === "sim") {
+    cls = "sim";
+    what = "시뮬레이션 — 가상 로켓";
+    how = "보드와 무관한 모의 데이터입니다. 실제 센서를 보려면 소스를 실장비로 바꾸세요.";
+  } else if (!port) {
+    cls = "wait";
+    what = "실장비 모드 — 연결 안 됨";
+    how = "아래 연결 버튼을 누르세요. Arduino 시리얼 모니터는 닫아야 합니다.";
+  } else if (mode === "telem") {
+    cls = S.telemRows ? "live" : "wait";
+    what = S.telemRows ? "실장비 — OpenRB 텔레메트리 수신 중" : "실장비 — 연결됨, 데이터 대기";
+    how = S.telemRows ? S.telemRows + "행 수신"
+                      : "보드에 L1 을 보내 USB 텔레메트리를 켜세요.";
+  } else {
+    cls = S.parser.ok ? "live" : "wait";
+    what = S.parser.ok ? "실장비 — 원격 패킷 수신 중" : "실장비 — 연결됨, 패킷 대기";
+    how = S.parser.ok ? S.parser.ok + "개 수신 (RK" + (S.parser.lastLen || "?") + ")"
+                      : "송신기 전원과 패킷 형식을 확인하세요.";
+  }
+  el.className = cls;
+  el.innerHTML = '<span class="what">' + what + '</span><span class="how">' + how + "</span>";
+}
+
+/* status tiles */
+function drawStatus() {
+  const rms = S.errN ? Math.sqrt(S.errSum / S.errN) : NaN;
+  const linkPct = S.txSent ? 100 * S.rxOk / S.txSent : NaN;
+  const modeCls = S.mode === "TRACK" ? "ok" : S.mode === "HOLD" ? "warn" : "idle";
+  const errSev = !Number.isFinite(rms) ? "" : rms < 1 ? "sev sev-ok" : rms < 5 ? "sev sev-warn" : "sev sev-crit";
+  const linkSev = !Number.isFinite(linkPct) ? "" : linkPct > 95 ? "sev sev-ok" : linkPct > 80 ? "sev sev-warn" : "sev sev-crit";
+  const phase = S.rocket ? S.rocket.phase : "—";
+  const age = S.lastPkt ? ((S.t - S.lastPktT) * 1000) : NaN;
+
+  if (sourceMode() === "telem") {
+    const r = S.telem;
+    const mc = (S.mode === "TRACK" || S.mode === "MANUAL") ? "ok"
+             : S.mode === "HOLD" ? "warn"
+             : S.mode === "FAULT" ? "crit" : "idle";
+    $("status").innerHTML = [
+      tile("모드", '<span class="pill ' + mc + '">' + (r ? S.mode : "—") + "</span>", "", ""),
+      tile("명령 vs 목표 RMS", fmt(rms), "°", errSev),
+      tile("거리", r ? fmt(r.range) : "—", "m", ""),
+      tile("로컬 GPS", r ? (r.gpsValid ? "fix " + r.gpsFix : "무효") : "—",
+           r && r.gpsValid ? " sv" + r.gpsSv : "", r && r.gpsValid ? "sev sev-ok" : "sev sev-warn"),
+      tile("원격", r ? (r.remValid ? "유효 seq" + r.remSeq : "무효") : "—", "",
+           r && r.remValid ? "sev sev-ok" : "sev sev-warn"),
+      tile("IMU", r ? (r.imuValid ? "OK" : "무효") : "—", "",
+           r && r.imuValid ? "sev sev-ok" : "sev sev-crit"),
+      tile("토크 / 한계", r ? ((r.torque ? "ON" : "OFF") + " / " + (r.limit ? "걸림" : "여유")) : "—",
+           "", r && r.limit ? "sev sev-warn" : ""),
+      tile("DXL 온도", r ? fmt(Math.max(r.tempY, r.tempP)) : "—", "℃",
+           r && Math.max(r.tempY, r.tempP) > 55 ? "sev sev-warn" : ""),
+      // 180 deg is the mechanical zero this build is designed around.
+      tile("서보 원시각 Y/P",
+           S.dxlRaw ? S.dxlRaw[0].toFixed(1) + " / " + S.dxlRaw[1].toFixed(1) : "—",
+           S.dxlRaw ? "°" : "",
+           S.dxlRaw
+             ? (Math.max(Math.abs(S.dxlRaw[0] - 180), Math.abs(S.dxlRaw[1] - 180)) <= 10
+                  ? "sev sev-ok" : "sev sev-warn")
+             : "")
+    ].join("");
+    $("pktAge").textContent = r ? "t=" + r.tMs + " ms · 행 " + S.telemRows : "—";
+    return;
+  }
+  $("status").innerHTML = [
+    tile("모드", '<span class="pill ' + modeCls + '">' + S.mode + "</span>", "", ""),
+    tile("지향 오차 RMS", fmt(rms), "°", errSev),
+    tile("최대 오차", fmt(S.errMax), "°", ""),
+    tile("수신율", fmt(linkPct), "%", linkSev),
+    tile("패킷 ok/bad/lost", S.rxOk + "/" + S.rxBad + "/" + S.rxLost, "", ""),
+    tile("패킷 나이", fmt(age), "ms", Number.isFinite(age) && age > P.cfgTimeout ? "sev sev-warn" : ""),
+    tile("비행 단계", phase, "", ""),
+    tile("경과", fmt(S.t), "s", "")
+  ].join("");
+  $("pktAge") && ($("pktAge").textContent = S.lastPkt ? "seq " + S.lastPkt.seq + " · " + fmt(age) + " ms" : "—");
+}
+function tile(k, v, u, cls) {
+  return '<div class="tile ' + cls + '"><div class="k">' + k + '</div><div class="v">' +
+         v + (u ? '<span class="u">' + u + "</span>" : "") + "</div></div>";
+}
+
+/* packet inspector */
+const SPANS_COMMON = [
+  [0, 2, "f0"], [2, 3, "f0"], [3, 4, "f0"], [4, 8, "f0"],
+  [8, 12, "f1"], [12, 16, "f1"], [16, 20, "f1"],
+  [20, 24, "f2"], [24, 28, "f2"], [28, 32, "f2"]
+];
+const SPANS_34 = SPANS_COMMON.concat([[32, 34, "fc"]]);
+const SPANS_58 = SPANS_COMMON.concat([
+  [32, 33, "f3"], [33, 34, "f3"], [34, 36, "f3"], [36, 42, "f3"],
+  [42, 48, "f3"], [48, 56, "f3"], [56, 58, "fc"]
+]);
+function drawPacket() {
+  if (!S.lastRaw) return;
+  const b = S.lastRaw;
+  const spans = (S.lastPkt && S.lastPkt.len === LEN34) ? SPANS_34 : SPANS_58;
+  let html = "";
+  for (const [s, e, cls] of spans) {
+    let hx = "";
+    for (let i = s; i < e; i++) hx += b[i].toString(16).padStart(2, "0").toUpperCase() + " ";
+    html += '<b class="' + cls + '">' + hx + "</b>";
+  }
+  $("hex").innerHTML = html;
+
+  const p = S.lastPkt;
+  const rows = [
+    ["seq / fixType", p.seq + " / " + p.fixType],
+    ["iTOW", p.iTOW + " ms"],
+    ["위도", (p.lat_i7 * 1e-7).toFixed(7) + "°"],
+    ["경도", (p.lon_i7 * 1e-7).toFixed(7) + "°"],
+    ["AGL", (p.alt_mm / 1000).toFixed(2) + " m"],
+    ["속도 N/E/D", [p.velN_mms, p.velE_mms, p.velD_mms].map(x => (x / 1000).toFixed(1)).join(" / ") + " m/s"],
+    ["형식", p.len === LEN34 ? "RK34 (IMU 없음)" : "RK58"],
+    ["imuFlags", "0x" + p.imuFlags.toString(16).padStart(2, "0") +
+      "  (a" + (p.imuFlags & 1 ? "✓" : "·") + " g" + (p.imuFlags & 2 ? "✓" : "·") +
+      " q" + (p.imuFlags & 4 ? "✓" : "·") + ")"],
+    ["quatAcc / imuAge", p.quatAcc + " / " + p.imuAgeMs + " ms"],
+    ["가속도 XYZ", [p.ax, p.ay, p.az].map(x => x.toFixed(2)).join(" / ") + " m/s²"],
+    ["각속도 XYZ", [p.gx, p.gy, p.gz].map(x => x.toFixed(1)).join(" / ") + " °/s"],
+    ["쿼터니언", [p.qw, p.qx, p.qy, p.qz].map(x => x.toFixed(4)).join(" ")]
+  ];
+  const eu = (() => {
+    const q = qNorm([p.qw, p.qx, p.qy, p.qz]);
+    const [w, x, y, z] = q;
+    let s = 2 * (w * y - z * x); s = Math.max(-1, Math.min(1, s));
+    return [Math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z)) * R2D,
+            Math.asin(s) * R2D,
+            Math.atan2(2 * (w * x + y * z), 1 - 2 * (x * x + y * y)) * R2D];
+  })();
+  rows.push(["로켓 자세 Y/P/R", eu.map(x => x.toFixed(1)).join(" / ") + "°"]);
+  const shown = p.len === LEN34
+    ? rows.filter(r => !/imu|가속도|각속도|쿼터니언|자세|quatAcc/i.test(r[0]))
+    : rows;
+  $("fields").innerHTML = shown.map(r => "<tr><td>" + r[0] + "</td><td>" + r[1] + "</td></tr>").join("");
+}
+
+/* CSV */
+$("csv").addEventListener("click", () => {
+  const head = (sourceMode() === "telem")
+    ? "t_s,mode,att_yaw,att_pitch,att_roll,qw,qx,qy,qz," +
+      "cmd_yaw,cmd_pitch,tgt_yaw,tgt_pitch,err_deg,pos_yaw,pos_pitch," +
+      "range_m,rel_n,rel_e,rel_d," +
+      "gps_valid,gps_fix,gps_sv,gps_lat_i7,gps_lon_i7," +
+      "rem_valid,rem_seq,rem_lat_i7,rem_lon_i7,rem_agl_m," +
+      "cur_y,cur_p,temp_y,temp_p,limit,torque\n"
+    : "t_s,mode,cmd_yaw,cmd_pitch,true_yaw,true_pitch,err_deg," +
+      "range_rx,range_true,rx_ok,rx_bad,rx_lost\n";
+  const blob = new Blob([head + S.log.map(r => r.join(",")).join("\n")], { type: "text/csv" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "tracking_bench.csv"; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+});
+
+/* ── main loop ──────────────────────────────────────────── */
+let lastFrame = performance.now();
+function frame(now) {
+  const wall = Math.min((now - lastFrame) / 1000, 0.1);
+  lastFrame = now;
+
+  if (sourceMode() === "sim") {
+    if (S.running && S.rocket && S.rocket.phase !== "DOWN") {
+      advance(wall * P.speed);
+      const r = S.rocket;
+      if (!track.length || Math.hypot(r.p[0] - track[track.length - 1][0],
+                                      r.p[1] - track[track.length - 1][1]) > 2) {
+        track.push([r.p[0], r.p[1]]);
+        if (track.length > 4000) track.shift();
+      }
+    }
+  } else if (sourceMode() === "telem") {
+    // The board runs the whole pipeline; the browser mirrors it.
+    S.t += wall;
+    const r = S.telem;
+    if (r && r.range > 0) {
+      const last = track[track.length - 1];
+      if (!last || Math.hypot(r.relN - last[0], r.relE - last[1]) > 1) {
+        track.push([r.relN, r.relE]);
+        if (track.length > 4000) track.shift();
+      }
+    }
+  } else {
+    // Remote packets only: the wall clock drives freshness and the loop.
+    S.t += wall;
+    ctrlAcc += wall;
+    while (ctrlAcc >= CTRL_DT) { ctrlAcc -= CTRL_DT; controlTick(S.t, CTRL_DT); }
+    S.rxOk = S.parser.ok; S.rxBad = S.parser.bad; S.rxLost = S.parser.lost;
+    S.txSent = S.rxOk + S.rxLost;
+  }
+
+  if (injectionRunning()) {
+    const hz = injectT > 1 ? (injectSent / injectT).toFixed(1) : "--";
+    $("inject").textContent = "주입 중지 (" + injectT.toFixed(0) + " s, " + hz + " Hz)";
+  }
+  drawBanner(); drawStatus(); drawPlan(); drawGimbal(); drawStrips(); drawPacket();
+  requestAnimationFrame(frame);
+}
+
+buildStrips();
+resetRun();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

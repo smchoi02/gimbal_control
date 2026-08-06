@@ -19,6 +19,12 @@ class GimbalController {
   void pollFeedback();
 
   const GimbalState& state() const { return state_; }
+  // Servo angles as the DYNAMIXEL reports them, before the zero offset is
+  // removed. These are what you align the horns against when mounting.
+  float yawRawDeg() const { return yawRawDeg_; }
+  float pitchRawDeg() const { return pitchRawDeg_; }
+  float yawZeroDeg() const { return yawZeroDeg_; }
+  float pitchZeroDeg() const { return pitchZeroDeg_; }
 
  private:
   Dynamixel2Arduino dxl_;
@@ -27,6 +33,8 @@ class GimbalController {
   float filteredPitchDeg_ = 0.0f;
   float yawZeroDeg_ = cfg::DXL_CENTER_DEG;
   float pitchZeroDeg_ = cfg::DXL_CENTER_DEG;
+  float yawRawDeg_ = 0.0f;
+  float pitchRawDeg_ = 0.0f;
 
   static float wrapDeg(float angle);
   static float servoDeg(float angle);

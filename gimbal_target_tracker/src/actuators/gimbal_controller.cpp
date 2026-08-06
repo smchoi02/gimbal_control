@@ -108,20 +108,19 @@ void GimbalController::setTorque(bool enabled) {
 void GimbalController::pollFeedback() {
   if (!state_.healthy) return;
   if (state_.yawOnline) {
+    yawRawDeg_ = servoDeg(dxl_.getPresentPosition(cfg::YAW_DXL_ID, UNIT_DEGREE));
     state_.yawPresentDeg =
-        cfg::YAW_SIGN *
-        wrapDeg(dxl_.getPresentPosition(cfg::YAW_DXL_ID, UNIT_DEGREE) -
-                yawZeroDeg_);
+        cfg::YAW_SIGN * wrapDeg(yawRawDeg_ - yawZeroDeg_);
     state_.yawCurrentRaw =
         dxl_.readControlTableItem(PRESENT_CURRENT, cfg::YAW_DXL_ID);
     state_.yawTemperatureC =
         dxl_.readControlTableItem(PRESENT_TEMPERATURE, cfg::YAW_DXL_ID);
   }
   if (state_.pitchOnline) {
+    pitchRawDeg_ =
+        servoDeg(dxl_.getPresentPosition(cfg::PITCH_DXL_ID, UNIT_DEGREE));
     state_.pitchPresentDeg =
-        cfg::PITCH_SIGN *
-        wrapDeg(dxl_.getPresentPosition(cfg::PITCH_DXL_ID, UNIT_DEGREE) -
-                pitchZeroDeg_);
+        cfg::PITCH_SIGN * wrapDeg(pitchRawDeg_ - pitchZeroDeg_);
     state_.pitchCurrentRaw =
         dxl_.readControlTableItem(PRESENT_CURRENT, cfg::PITCH_DXL_ID);
     state_.pitchTemperatureC =
