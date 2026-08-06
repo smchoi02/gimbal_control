@@ -34,22 +34,6 @@ void datasetPosition(uint32_t elapsedMs, float* northM, float* eastM,
   *upM = interpolate(a.upM, b.upM, fraction);
 }
 
-float pressureAtRelativeHeight(float localPressurePa, float remoteUpM) {
-  const float base =
-      1.0f - remoteUpM / target_geometry::BARO_SCALE_M;
-  if (base <= 0.0f) return 0.0f;
-  return localPressurePa *
-         powf(base, 1.0f / target_geometry::BARO_EXPONENT);
-}
-
-float altitudeFromPressure(float pressurePa, float seaLevelPressurePa) {
-  if (pressurePa <= 0.0f || seaLevelPressurePa <= 0.0f) return 0.0f;
-  return target_geometry::BARO_SCALE_M *
-         (1.0f -
-          powf(pressurePa / seaLevelPressurePa,
-               target_geometry::BARO_EXPONENT));
-}
-
 }  // namespace
 
 void VirtualRemoteSource::setMode(Mode mode, uint32_t nowMs) {
@@ -104,8 +88,7 @@ void VirtualRemoteSource::updateVirtualLocal(uint32_t nowMs) {
 bool VirtualRemoteSource::createPacket(
     uint32_t nowMs, const GpsFix& localGps,
     const BarometerSample& localBarometer) {
-  if (!localGps.valid || !localBarometer.valid ||
-      localBarometer.pressurePa <= 0.0f) {
+  if (!localGps.valid) {
     remote_.valid = false;
     return false;
   }
@@ -121,7 +104,6 @@ bool VirtualRemoteSource::createPacket(
 
   remote_protocol::Payload payload;
   payload.sequence = sequence_++;
-  payload.senderTimeMs = nowMs;
   payload.latI7 =
       localGps.latI7 +
       static_cast<int32_t>(lroundf(
@@ -130,15 +112,12 @@ bool VirtualRemoteSource::createPacket(
       localGps.lonI7 +
       static_cast<int32_t>(lroundf(
           eastM / (target_geometry::METERS_PER_I7_LAT * cosLatitude)));
-  const float remotePressure =
-      pressureAtRelativeHeight(localBarometer.pressurePa, upM);
-  payload.pressurePaX10 =
-      static_cast<uint32_t>(lroundf(remotePressure * 10.0f));
-  payload.temperatureCX100 =
-      static_cast<int16_t>(lroundf(localBarometer.temperatureC * 100.0f));
+  payload.iTowMs = nowMs;
+  payload.aglMm = static_cast<int32_t>(lroundf(upM * 1000.0f));
+  payload.velNMmS = 0;
+  payload.velEMmS = 0;
+  payload.velDMmS = 0;
   payload.fixType = 3;
-  payload.flags =
-      remote_protocol::FLAG_GPS_VALID | remote_protocol::FLAG_BARO_VALID;
 
   uint8_t bytes[remote_protocol::PACKET_SIZE];
   const size_t length =
@@ -159,40 +138,22 @@ bool VirtualRemoteSource::createPacket(
 bool VirtualRemoteSource::createFixedTargetPacket(
     uint32_t nowMs, const GpsFix& localGps,
     const BarometerSample& localBarometer) {
-  if (!localGps.valid || !localBarometer.valid ||
-      localBarometer.pressurePa <= 0.0f) {
-    remote_.valid = false;
-    return false;
-  }
-
-  // Convert the receiver's real BMP581 pressure to an absolute barometric
-  // altitude, then encode the fixed target altitude as a remote pressure.
-  // The existing relative-altitude and packet-processing paths remain intact.
-  const float localAltitudeM =
-      altitudeFromPressure(localBarometer.pressurePa,
-                           fixed_target::SEA_LEVEL_PRESSURE_PA);
-  const float targetAboveLocalM =
-      fixed_target::ALTITUDE_M - localAltitudeM;
-  const float remotePressurePa =
-      pressureAtRelativeHeight(localBarometer.pressurePa,
-                               targetAboveLocalM);
-  if (!isfinite(remotePressurePa) || remotePressurePa <= 0.0f) {
+  if (!localGps.valid) {
     remote_.valid = false;
     return false;
   }
 
   remote_protocol::Payload payload;
   payload.sequence = sequence_++;
-  payload.senderTimeMs = nowMs;
+  payload.iTowMs = nowMs;
   payload.latI7 = fixed_target::LAT_I7;
   payload.lonI7 = fixed_target::LON_I7;
-  payload.pressurePaX10 =
-      static_cast<uint32_t>(lroundf(remotePressurePa * 10.0f));
-  payload.temperatureCX100 = static_cast<int16_t>(
-      lroundf(fixed_target::TEMPERATURE_C * 100.0f));
+  payload.aglMm = static_cast<int32_t>(
+      lroundf(fixed_target::ALTITUDE_M * 1000.0f));
+  payload.velNMmS = 0;
+  payload.velEMmS = 0;
+  payload.velDMmS = 0;
   payload.fixType = 3;
-  payload.flags =
-      remote_protocol::FLAG_GPS_VALID | remote_protocol::FLAG_BARO_VALID;
 
   uint8_t bytes[remote_protocol::PACKET_SIZE];
   const size_t length =

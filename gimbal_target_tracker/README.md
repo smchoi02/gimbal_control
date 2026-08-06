@@ -4,7 +4,7 @@ OpenRB-150 기반 표적 추적 짐벌 펌웨어다.
 
 - 자세: BNO085 (`Wire` I2C)
 - 로컬 위치/고도: MAX-M10S, BMP581 (`Wire` I2C)
-- 원격 표적 링크: EBYTE E22-400T22S (`Serial3` UART)
+- 원격 표적 링크: EBYTE E22-900T22S (`Serial3` UART)
 - 구동: DYNAMIXEL yaw/pitch (`Serial1`)
 - 기록: SD 카드 (SPI)
 
@@ -15,7 +15,7 @@ ICM-20948 관련 선택 분기와 드라이버는 제거되었으며, 이 프로
 
 ## 동작
 
-1. E22-400T22S가 투명 UART 모드로 원격 GPS·기압 패킷을 수신한다.
+1. E22-900T22S가 투명 UART 모드로 원격 GPS·AGL·속도 패킷을 수신한다.
 2. 로컬 MAX-M10S/BMP581과 원격 데이터를 NED 목표 벡터로 계산한다.
 3. BNO085 Rotation Vector로 NED 벡터를 짐벌 body 좌표계로 회전한다.
 4. yaw/pitch 명령을 기구 한계와 속도 제한에 맞춰 DYNAMIXEL에 전송한다.
@@ -36,26 +36,25 @@ ICM-20948 관련 선택 분기와 드라이버는 제거되었으며, 이 프로
 | `E22_M0_PIN`, `E22_M1_PIN` | `-1` | `-1`이면 두 모드 핀을 물리적으로 GND에 연결 |
 | `E22_AUX_PIN` | `-1` | 선택. 연결하면 모듈 준비 상태를 상태 출력에 반영 |
 
-E22-400T22S는 M0/M1을 부동 상태로 두면 안 된다. 정상 투명 전송은 `M0=LOW`, `M1=LOW`이며, 두 핀을 GND에 고정하거나 각각 MCU GPIO로 구동한다. 송신기와 수신기의 UART baud, 무선 채널, NETID, air data rate, 암호화 설정은 모두 같아야 한다. 이 펌웨어는 E22 레지스터를 자동 설정하지 않는다.
+E22-900T22S는 M0/M1을 부동 상태로 두면 안 된다. 정상 투명 전송은 `M0=LOW`, `M1=LOW`이며, 두 핀을 GND에 고정하거나 각각 MCU GPIO로 구동한다. 송신기와 수신기의 UART baud, 900 MHz 대역 채널, NETID, air data rate, 암호화 설정은 모두 같아야 한다. 이 펌웨어는 E22 레지스터를 자동 설정하지 않는다.
 
 ## 원격 패킷
 
-송신측도 `src/comm/remote_packet.h`의 `encode()`를 사용하면 동일한 27-byte little-endian 패킷을 생성한다. 기준 송신 예제는 [examples/e22_sender_example/e22_sender_example.ino](examples/e22_sender_example/e22_sender_example.ino)에 있다.
+수신기는 `trs_test.ino`의 34-byte little-endian `RK` 패킷을 해석한다. 실제 수신 검증에는 `examples/e22_link_rx_test/e22_link_rx_test.ino`를 사용한다.
 
 | Offset | Size | 내용 |
 |---:|---:|---|
-| 0 | 2 | ASCII `GT` |
-| 2 | 1 | protocol version = 1 |
-| 3 | 1 | sequence |
-| 4 | 4 | 송신측 `millis()` |
+| 0 | 2 | ASCII `RK` |
+| 2 | 1 | sequence |
+| 3 | 1 | GPS fix type |
+| 4 | 4 | temporary iTOW ms |
 | 8 | 4 | latitude, signed `1e-7 deg` |
 | 12 | 4 | longitude, signed `1e-7 deg` |
-| 16 | 4 | pressure, Pa × 10 |
-| 20 | 2 | temperature, °C × 100 |
-| 22 | 1 | GPS fix type |
-| 23 | 1 | bit0 GPS valid, bit1 barometer valid |
-| 24 | 1 | reserved = 0 |
-| 25 | 2 | CRC-16/CCITT-FALSE, bytes 0..24 |
+| 16 | 4 | AGL, signed mm |
+| 20 | 4 | north velocity, signed mm/s |
+| 24 | 4 | east velocity, signed mm/s |
+| 28 | 4 | down velocity, signed mm/s |
+| 32 | 2 | CRC-16/CCITT-FALSE, bytes 0..31 |
 
 ## BNO085 주의사항
 

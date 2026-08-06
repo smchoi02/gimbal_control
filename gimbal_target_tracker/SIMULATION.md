@@ -100,7 +100,7 @@ time_ms,north_m,east_m,up_m
         ↓
 가상 위도·경도·기압 계산
         ↓
-27바이트 GT 패킷 encode + CRC16
+34바이트 RK 패킷 encode + CRC16
         ↓
 동일한 패킷 Parser로 decode
         ↓

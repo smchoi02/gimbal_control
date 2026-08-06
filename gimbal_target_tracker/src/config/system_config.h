@@ -27,12 +27,12 @@ constexpr bool BNO_USE_GAME_ROTATION_VECTOR = true;
 constexpr uint8_t BMP581_ADDRESS = 0x47;  // BMP581: 0x46 primary, 0x47 secondary.
 constexpr uint8_t MAX_M10S_ADDRESS = 0x42;
 
-// EBYTE E22-400T22S. Serial3 is the OpenRB header marked RX/TX.
+// EBYTE E22-900T22S. Serial3 is the OpenRB header marked RX/TX.
 // The OpenRB Arduino core internally numbers those pins 13 (RX) and 14 (TX),
 // but those numbers are not printed on the board.
 // The module UART configuration must match on the transmitter and receiver.
 constexpr uint32_t E22_UART_BAUD = 9600;
-// E22-400T22S normal/transparent mode is M0=LOW, M1=LOW. These pins must
+// E22-900T22S normal/transparent mode is M0=LOW, M1=LOW. These pins must
 // never float. Set each value to an MCU GPIO when connected; otherwise wire
 // both module pins to GND and leave the corresponding value at -1.
 constexpr int8_t E22_M0_PIN = -1;

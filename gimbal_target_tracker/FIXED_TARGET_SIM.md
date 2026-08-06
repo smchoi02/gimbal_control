@@ -35,8 +35,7 @@ src/simulation/fixed_target_config.h
 ```cpp
 constexpr int32_t LAT_I7 = 375000000;    // 37.5000000 deg
 constexpr int32_t LON_I7 = 1270000000;   // 127.0000000 deg
-constexpr float ALTITUDE_M = 100.0f;     // mean sea level
-constexpr float SEA_LEVEL_PRESSURE_PA = 101325.0f;
+constexpr float ALTITUDE_M = 100.0f;     // AGL / shared launch reference
 ```
 
 위도와 경도는 실제 도(degree)에 `10,000,000`을 곱한 정수다. 예를 들어

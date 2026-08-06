@@ -45,8 +45,10 @@ struct RemoteTargetSample {
   uint32_t senderTimeMs = 0;
   int32_t latI7 = 0;
   int32_t lonI7 = 0;
-  float pressurePa = 0.0f;
-  float temperatureC = 0.0f;
+  float aglM = 0.0f;
+  float velNMps = 0.0f;
+  float velEMps = 0.0f;
+  float velDMps = 0.0f;
   uint8_t fixType = 0;
   uint32_t timestampMs = 0;
   bool valid = false;

@@ -14,15 +14,9 @@ constexpr float BARO_EXPONENT = 0.190263f;
 constexpr float BARO_SCALE_M = 44330.77f;
 
 // Positive result means the remote transmitter is above this payload.
-inline float relativeAltitudeM(float localPressurePa, float remotePressurePa) {
-  if (localPressurePa <= 0.0f || remotePressurePa <= 0.0f) return 0.0f;
-  return BARO_SCALE_M *
-         (1.0f - powf(remotePressurePa / localPressurePa, BARO_EXPONENT));
-}
-
-inline bool relativeNed(const GpsFix& local, const BarometerSample& localBaro,
-                        const RemoteTargetSample& remote, float ned[3]) {
-  if (!local.valid || !localBaro.valid || !remote.valid) return false;
+inline bool relativeNed(const GpsFix& local, const RemoteTargetSample& remote,
+                        float ned[3]) {
+  if (!local.valid || !remote.valid) return false;
 
   const int64_t dLatI7 = static_cast<int64_t>(remote.latI7) - local.latI7;
   const int64_t dLonI7 = static_cast<int64_t>(remote.lonI7) - local.lonI7;
@@ -32,8 +26,9 @@ inline bool relativeNed(const GpsFix& local, const BarometerSample& localBaro,
 
   ned[0] = static_cast<float>(dLatI7) * METERS_PER_I7_LAT;
   ned[1] = static_cast<float>(dLonI7) * METERS_PER_I7_LAT * cosLat;
-  const float remoteAboveM =
-      relativeAltitudeM(localBaro.pressurePa, remote.pressurePa);
+  // The TRS RK packet carries altitude above its launch/ground reference.
+  // This tracker therefore assumes its own origin is the same reference.
+  const float remoteAboveM = remote.aglM;
   if (!isfinite(remoteAboveM) ||
       fabsf(remoteAboveM) > cfg::MAX_ABS_RELATIVE_ALT_M) {
     return false;

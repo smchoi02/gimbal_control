@@ -37,7 +37,7 @@ void TrackerApp::begin() {
   debug_.println(gpsOk ? F("OK; NAV-PVT 10Hz requested") : F("FAIL"));
 
   e22_.begin(cfg::E22_M0_PIN, cfg::E22_M1_PIN, cfg::E22_AUX_PIN);
-  debug_.print(F("# E22-400T22S: normal/transparent receiver "));
+  debug_.print(F("# E22-900T22S: normal/transparent receiver "));
   debug_.println(e22_.moduleReady() ? F("ready") : F("starting/busy"));
 
   const bool gimbalOk = gimbal_.begin();
@@ -119,8 +119,8 @@ void TrackerApp::controlTick(uint32_t nowMs, float dtSeconds) {
   if (trackingInputsFresh(nowMs)) {
     float targetNed[3];
     RelativeTarget calculated;
-    if (target_geometry::relativeNed(localGpsInput(), localBarometerInput(),
-                                     remoteInput(), targetNed) &&
+    if (target_geometry::relativeNed(localGpsInput(), remoteInput(),
+                                     targetNed) &&
         target_geometry::pointingAngles(targetNed, imu_.sample().q,
                                         &calculated)) {
       relative_ = calculated;
@@ -278,10 +278,7 @@ void TrackerApp::handleCommand(char* line) {
 }
 
 bool TrackerApp::trackingInputsFresh(uint32_t nowMs) const {
-  return attitudeFresh(nowMs) && localBarometerInput().valid &&
-         isFresh(nowMs, localBarometerInput().timestampMs,
-                 cfg::LOCAL_BARO_TIMEOUT_MS) &&
-         localGpsInput().valid &&
+  return attitudeFresh(nowMs) && localGpsInput().valid &&
          isFresh(nowMs, localGpsInput().timestampMs,
                  cfg::LOCAL_GPS_TIMEOUT_MS) &&
          remoteInput().valid &&

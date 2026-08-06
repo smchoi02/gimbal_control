@@ -30,7 +30,7 @@ void SdLogger::writeHeader() {
         "local_gps_valid,local_itow_ms,local_lat_i7,local_lon_i7,"
         "local_hmsl_mm,local_fix_type,local_num_sv,"
         "remote_valid,remote_seq,remote_sender_ms,remote_lat_i7,remote_lon_i7,"
-        "remote_pressure_pa,remote_temp_c,remote_fix_type,"
+        "remote_agl_m,remote_vel_n_mps,remote_vel_e_mps,remote_vel_d_mps,remote_fix_type,"
         "rel_n_m,rel_e_m,rel_d_m,range_m,target_yaw_deg,target_pitch_deg,"
         "gimbal_yaw_cmd,gimbal_pitch_cmd,gimbal_yaw_pos,gimbal_pitch_pos,"
         "gimbal_cur_y,gimbal_cur_p,gimbal_temp_y,gimbal_temp_p,"
@@ -76,8 +76,10 @@ void SdLogger::log(uint32_t nowMs, TrackMode mode,
   CSV_VALUE(remote.senderTimeMs);
   CSV_VALUE(remote.latI7);
   CSV_VALUE(remote.lonI7);
-  CSV_VALUE(remote.pressurePa, 2);
-  CSV_VALUE(remote.temperatureC, 2);
+  CSV_VALUE(remote.aglM, 3);
+  CSV_VALUE(remote.velNMps, 3);
+  CSV_VALUE(remote.velEMps, 3);
+  CSV_VALUE(remote.velDMps, 3);
   CSV_VALUE(remote.fixType);
   CSV_VALUE(relative.northM, 3);
   CSV_VALUE(relative.eastM, 3);

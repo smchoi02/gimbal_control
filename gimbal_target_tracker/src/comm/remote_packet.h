@@ -3,35 +3,32 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
+#include <math.h>
 
 #include "../common/crc16.h"
 #include "../common/types.h"
 
+// TRS sender wire format.  All multi-byte values are little-endian.
+//  0 magic "RK", 2 sequence, 3 fix_type, 4 temporary iTOW ms,
+//  8 lat_i7, 12 lon_i7, 16 AGL mm, 20/24/28 N/E/D velocity mm/s,
+//  32 CRC-16/CCITT-FALSE over bytes 0..31.
 namespace remote_protocol {
 
-constexpr uint8_t MAGIC_0 = 'G';
-constexpr uint8_t MAGIC_1 = 'T';
-constexpr uint8_t VERSION = 1;
-constexpr size_t PACKET_SIZE = 27;
+constexpr uint8_t MAGIC_0 = 'R';
+constexpr uint8_t MAGIC_1 = 'K';
+constexpr size_t PACKET_SIZE = 34;
 
-// Wire layout, little-endian:
-//  0 magic "GT", 2 version, 3 sequence, 4 sender_ms,
-//  8 lat_i7, 12 lon_i7, 16 pressure_pa_x10,
-// 20 temperature_c_x100, 22 fix_type, 23 flags,
-// 24 reserved, 25 CRC16 over bytes 0..24.
 struct Payload {
   uint8_t sequence = 0;
-  uint32_t senderTimeMs = 0;
+  uint8_t fixType = 0;
+  uint32_t iTowMs = 0;
   int32_t latI7 = 0;
   int32_t lonI7 = 0;
-  uint32_t pressurePaX10 = 0;
-  int16_t temperatureCX100 = 0;
-  uint8_t fixType = 0;
-  uint8_t flags = 0;
+  int32_t aglMm = 0;
+  int32_t velNMmS = 0;
+  int32_t velEMmS = 0;
+  int32_t velDMmS = 0;
 };
-
-constexpr uint8_t FLAG_GPS_VALID = 0x01;
-constexpr uint8_t FLAG_BARO_VALID = 0x02;
 
 inline void writeU16(uint8_t* out, uint16_t value) {
   out[0] = static_cast<uint8_t>(value);
@@ -61,33 +58,33 @@ inline size_t encode(const Payload& payload, uint8_t* out, size_t capacity) {
   if (capacity < PACKET_SIZE) return 0;
   out[0] = MAGIC_0;
   out[1] = MAGIC_1;
-  out[2] = VERSION;
-  out[3] = payload.sequence;
-  writeU32(out + 4, payload.senderTimeMs);
+  out[2] = payload.sequence;
+  out[3] = payload.fixType;
+  writeU32(out + 4, payload.iTowMs);
   writeU32(out + 8, static_cast<uint32_t>(payload.latI7));
   writeU32(out + 12, static_cast<uint32_t>(payload.lonI7));
-  writeU32(out + 16, payload.pressurePaX10);
-  writeU16(out + 20, static_cast<uint16_t>(payload.temperatureCX100));
-  out[22] = payload.fixType;
-  out[23] = payload.flags;
-  out[24] = 0;
-  writeU16(out + 25, crc16CcittFalse(out, 25));
+  writeU32(out + 16, static_cast<uint32_t>(payload.aglMm));
+  writeU32(out + 20, static_cast<uint32_t>(payload.velNMmS));
+  writeU32(out + 24, static_cast<uint32_t>(payload.velEMmS));
+  writeU32(out + 28, static_cast<uint32_t>(payload.velDMmS));
+  writeU16(out + 32, crc16CcittFalse(out, 32));
   return PACKET_SIZE;
 }
 
 inline bool decode(const uint8_t* in, size_t length, Payload* payload) {
   if (length != PACKET_SIZE || in[0] != MAGIC_0 || in[1] != MAGIC_1 ||
-      in[2] != VERSION || crc16CcittFalse(in, 25) != readU16(in + 25)) {
+      crc16CcittFalse(in, 32) != readU16(in + 32)) {
     return false;
   }
-  payload->sequence = in[3];
-  payload->senderTimeMs = readU32(in + 4);
+  payload->sequence = in[2];
+  payload->fixType = in[3];
+  payload->iTowMs = readU32(in + 4);
   payload->latI7 = static_cast<int32_t>(readU32(in + 8));
   payload->lonI7 = static_cast<int32_t>(readU32(in + 12));
-  payload->pressurePaX10 = readU32(in + 16);
-  payload->temperatureCX100 = static_cast<int16_t>(readU16(in + 20));
-  payload->fixType = in[22];
-  payload->flags = in[23];
+  payload->aglMm = static_cast<int32_t>(readU32(in + 16));
+  payload->velNMmS = static_cast<int32_t>(readU32(in + 20));
+  payload->velEMmS = static_cast<int32_t>(readU32(in + 24));
+  payload->velDMmS = static_cast<int32_t>(readU32(in + 28));
   return true;
 }
 
@@ -109,19 +106,16 @@ class Parser {
       return false;
     }
     if (count_ < PACKET_SIZE) return false;
-
     if (decode(buffer_, PACKET_SIZE, payload)) {
       ++packetsOk;
       if (haveSequence_) {
-        sequenceLost +=
-            static_cast<uint8_t>(payload->sequence - lastSequence_ - 1);
+        sequenceLost += static_cast<uint8_t>(payload->sequence - lastSequence_ - 1);
       }
       lastSequence_ = payload->sequence;
       haveSequence_ = true;
       count_ = 0;
       return true;
     }
-
     ++packetsBad;
     resynchronize();
     return false;
@@ -149,18 +143,17 @@ class Parser {
 inline RemoteTargetSample toSample(const Payload& payload, uint32_t nowMs) {
   RemoteTargetSample out;
   out.sequence = payload.sequence;
-  out.senderTimeMs = payload.senderTimeMs;
+  out.senderTimeMs = payload.iTowMs;
   out.latI7 = payload.latI7;
   out.lonI7 = payload.lonI7;
-  out.pressurePa = static_cast<float>(payload.pressurePaX10) * 0.1f;
-  out.temperatureC = static_cast<float>(payload.temperatureCX100) * 0.01f;
+  out.aglM = static_cast<float>(payload.aglMm) * 0.001f;
+  out.velNMps = static_cast<float>(payload.velNMmS) * 0.001f;
+  out.velEMps = static_cast<float>(payload.velEMmS) * 0.001f;
+  out.velDMps = static_cast<float>(payload.velDMmS) * 0.001f;
   out.fixType = payload.fixType;
   out.timestampMs = nowMs;
-  out.valid = (payload.flags & (FLAG_GPS_VALID | FLAG_BARO_VALID)) ==
-                  (FLAG_GPS_VALID | FLAG_BARO_VALID) &&
-              (payload.fixType == 3 || payload.fixType == 4) &&
-              payload.pressurePaX10 >= 300000u &&
-              payload.pressurePaX10 <= 1250000u;
+  out.valid = (payload.fixType == 3 || payload.fixType == 4) &&
+              isfinite(out.aglM) && fabsf(out.aglM) <= 30000.0f;
   return out;
 }
 

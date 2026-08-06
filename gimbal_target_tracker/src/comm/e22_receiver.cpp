@@ -11,7 +11,7 @@ void E22Receiver::begin(int8_t m0Pin, int8_t m1Pin, int8_t auxPin) {
   }
   auxPin_ = auxPin;
   if (auxPin_ >= 0) pinMode(auxPin_, INPUT);
-  // The E22-400T22S needs at least 1 ms after an M0/M1 mode transition.
+  // The E22-900T22S needs at least 1 ms after an M0/M1 mode transition.
   delay(5);
 }
 

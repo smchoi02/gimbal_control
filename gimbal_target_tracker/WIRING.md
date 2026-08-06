@@ -10,36 +10,36 @@
 | BNO085 | VCC / GND | 3.3V / GND | BNO085 보드 사양 준수 |
 | BMP581 | SDA / SCL | D11 / D12 | 기본 주소 `0x47` |
 | MAX-M10S | SDA / SCL | D11 / D12 | 기본 주소 `0x42` |
-| E22-400T22S | TXD | OpenRB `RX` / `Serial3 RX` | 수신 데이터 |
-| E22-400T22S | RXD | OpenRB `TX` / `Serial3 TX` | 설정 또는 양방향 통신 시 연결 |
-| E22-400T22S | M0 | GND 또는 설정 GPIO | 정상 투명 모드에서는 LOW |
-| E22-400T22S | M1 | GND 또는 설정 GPIO | 정상 투명 모드에서는 LOW |
-| E22-400T22S | AUX | 선택 GPIO 또는 미연결 | LOW=기동/처리 중, HIGH=준비 |
-| E22-400T22S | NRST | 풀업 또는 MCU GPIO | 사용하지 않으면 보드 권장 회로대로 유지; LOW는 리셋 |
-| E22-400T22S | VCC / GND | 안정된 전원 / GND | VCC 허용 범위와 I/O 로직 전압은 사용 보드 사양 확인 |
-| E22-400T22S | ANT | 지정 안테나 | 안테나 연결 후 전원 인가 |
+| E22-900T22S | TXD | OpenRB `RX` / `Serial3 RX` | 수신 데이터 |
+| E22-900T22S | RXD | OpenRB `TX` / `Serial3 TX` | 설정 또는 양방향 통신 시 연결 |
+| E22-900T22S | M0 | GND 또는 설정 GPIO | 정상 투명 모드에서는 LOW |
+| E22-900T22S | M1 | GND 또는 설정 GPIO | 정상 투명 모드에서는 LOW |
+| E22-900T22S | AUX | 선택 GPIO 또는 미연결 | LOW=기동/처리 중, HIGH=준비 |
+| E22-900T22S | NRST | 풀업 또는 MCU GPIO | 사용하지 않으면 보드 권장 회로대로 유지; LOW는 리셋 |
+| E22-900T22S | VCC / GND | 안정된 전원 / GND | VCC 허용 범위와 I/O 로직 전압은 사용 보드 사양 확인 |
+| E22-900T22S | ANT | 지정 안테나 | 안테나 연결 후 전원 인가 |
 | SD | MOSI / SCK / MISO / CS | D8 / D9 / D10 / D4 | `SD_CS_PIN = 4` |
 | DYNAMIXEL yaw/pitch | TTL 3선 | OpenRB DYNAMIXEL 포트 | ID 1 / 2 |
 
-E22-400T22S의 M0/M1은 약한 pull-up이므로 미연결 상태로 두지 않는다. `system_config.h`에서 두 GPIO가 `-1`인 기본 구성은 두 핀을 GND에 물리적으로 연결하는 구성이다. MCU GPIO를 쓸 때는 `E22_M0_PIN`, `E22_M1_PIN`에 실제 핀 번호를 넣는다.
+E22-900T22S의 M0/M1은 약한 pull-up이므로 미연결 상태로 두지 않는다. `system_config.h`에서 두 GPIO가 `-1`인 기본 구성은 두 핀을 GND에 물리적으로 연결하는 구성이다. MCU GPIO를 쓸 때는 `E22_M0_PIN`, `E22_M1_PIN`에 실제 핀 번호를 넣는다.
 
 ```text
-E22-400T22S TXD  ─────────→ OpenRB RX (Serial3 RX)
-E22-400T22S RXD  ←───────── OpenRB TX (Serial3 TX, 선택)
-E22-400T22S M0   ────────── GND 또는 OpenRB GPIO (LOW)
-E22-400T22S M1   ────────── GND 또는 OpenRB GPIO (LOW)
-E22-400T22S AUX  ─────────→ OpenRB GPIO (선택)
-E22-400T22S GND  ────────── OpenRB GND
-E22-400T22S VCC  ────────── 안정된 전원
+E22-900T22S TXD  ─────────→ OpenRB RX (Serial3 RX)
+E22-900T22S RXD  ←───────── OpenRB TX (Serial3 TX, 선택)
+E22-900T22S M0   ────────── GND 또는 OpenRB GPIO (LOW)
+E22-900T22S M1   ────────── GND 또는 OpenRB GPIO (LOW)
+E22-900T22S AUX  ─────────→ OpenRB GPIO (선택)
+E22-900T22S GND  ────────── OpenRB GND
+E22-900T22S VCC  ────────── 안정된 전원
 ```
 
-## E22-400T22S 운용 조건
+## E22-900T22S 운용 조건
 
 - 일반 투명 전송/수신: `M0=0`, `M1=0`
 - 설정 모드: `M0=0`, `M1=1`
 - M0/M1 변경 뒤 모듈이 준비될 때까지 기다린다. AUX를 연결했다면 HIGH를 확인한다.
 - 수신만 할 때도 M0/M1은 반드시 LOW로 고정한다.
-- 송신기와 수신기의 UART baud, 채널, NETID, air data rate, 암호화 설정을 동일하게 맞춘다.
+- 송신기와 수신기의 UART baud, 900 MHz 대역 채널, NETID, air data rate, 암호화 설정을 동일하게 맞춘다.
 - 출력 전류 여유가 있는 안정 전원을 사용한다. 무선 송신과 SD 쓰기 순간의 전압 강하를 확인한다.
 
 펌웨어는 부팅 시 M0/M1을 LOW로 구동하고 5 ms 대기한다. AUX가 설정된 경우 LOW 동안 수신 패킷 해석을 보류하며, 상태 로그에 `e22_ready`를 출력한다.
@@ -71,5 +71,5 @@ D12 (SCL) ──┬── BNO085 SCL
 
 ```text
 # BNO085: OK; Game Rotation Vector
-# E22-400T22S: normal/transparent receiver ready
+# E22-900T22S: normal/transparent receiver ready
 ```
