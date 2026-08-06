@@ -16,6 +16,10 @@ constexpr uint32_t IMU_TIMEOUT_MS = 200;
 constexpr uint32_t LOCAL_BARO_TIMEOUT_MS = 300;
 constexpr uint32_t LOCAL_GPS_TIMEOUT_MS = 1500;
 constexpr uint32_t REMOTE_TIMEOUT_MS = 1000;
+// true: CRC와 RK packet structure are valid이면 sender GPS fix/AGL semantic
+// validation failure도 원격 추적 입력으로 사용한다. 송신 GPS가 아직 fix=0을
+// 보내는 통신 시험용 옵션이다.
+constexpr bool REMOTE_FORCE_USE_RECEIVED_DATA = true;
 
 // Shared I2C bus: OpenRB-150 D11=SDA, D12=SCL.
 constexpr uint32_t I2C_CLOCK_HZ = 400000;

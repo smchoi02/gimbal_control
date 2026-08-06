@@ -1,5 +1,7 @@
 #include "e22_receiver.h"
 
+#include "../config/system_config.h"
+
 void E22Receiver::begin(int8_t m0Pin, int8_t m1Pin, int8_t auxPin) {
   if (m0Pin >= 0) {
     pinMode(m0Pin, OUTPUT);
@@ -25,6 +27,10 @@ bool E22Receiver::poll(uint32_t nowMs) {
   while (serial_.available()) {
     if (parser_.feed(static_cast<uint8_t>(serial_.read()), &payload)) {
       sample_ = remote_protocol::toSample(payload, nowMs);
+      // The parser has already accepted only a complete RK packet with a
+      // valid CRC.  During link testing, accept its coordinates even while
+      // the transmitter reports a provisional/no GPS fix or unusual AGL.
+      if (cfg::REMOTE_FORCE_USE_RECEIVED_DATA) sample_.valid = true;
       received = true;
     }
   }
