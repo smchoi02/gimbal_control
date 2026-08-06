@@ -3,7 +3,6 @@
 #include "../common/time_utils.h"
 #include "../config/system_config.h"
 #include "../math/target_geometry.h"
-#include "../simulation/fixed_target_config.h"
 
 TrackerApp::TrackerApp(Stream& debug, Stream& lora)
     : debug_(debug),
@@ -61,8 +60,7 @@ void TrackerApp::begin() {
   }
 
   if (!gimbalOk) mode_ = TrackMode::FAULT;
-  debug_.println(
-      F("# commands: ? | C | Z | T0/T1 | P | S0/S1/S2/S3/SR"));
+  debug_.println(F("# commands: ? | C | Z | T0/T1 | K | P"));
 
   const uint32_t nowUs = micros();
   lastControlUs_ = lastBaroUs_ = lastGpsPollUs_ = lastLogUs_ = nowUs;
@@ -85,7 +83,6 @@ void TrackerApp::update() {
     lastBaroUs_ = nowUs;
     barometer_.poll(nowMs);
   }
-  simulation_.update(nowMs, gps_.fix(), barometer_.sample());
   if (elapsedUs(nowUs, lastControlUs_, cfg::CONTROL_PERIOD_US)) {
     const float dtSeconds =
         static_cast<uint32_t>(nowUs - lastControlUs_) * 1.0e-6f;
@@ -158,8 +155,7 @@ void TrackerApp::logTick(uint32_t nowMs) {
 }
 
 void TrackerApp::printStatus(uint32_t nowMs) {
-  const remote_protocol::Parser& selectedParser =
-      simulation_.enabled() ? simulation_.parser() : e22_.parser();
+  const remote_protocol::Parser& selectedParser = e22_.parser();
   debug_.print(F("# mode="));
   debug_.print(static_cast<uint8_t>(mode_));
   debug_.print(F(" imu="));
@@ -188,8 +184,6 @@ void TrackerApp::printStatus(uint32_t nowMs) {
                        cfg::REMOTE_TIMEOUT_MS));
   debug_.print(F(" e22_ready="));
   debug_.print(e22_.moduleReady());
-  debug_.print(F(" sim="));
-  debug_.print(static_cast<uint8_t>(simulation_.mode()));
   debug_.print(F(" range_m="));
   debug_.print(relative_.rangeM, 1);
   debug_.print(F(" cmd="));
@@ -237,42 +231,20 @@ void TrackerApp::handleCommand(char* line) {
       gimbal_.setTorque(line[1] == '1');
       debug_.println(line[1] == '1' ? F("# torque ON") : F("# torque OFF"));
       break;
+    case 'K':
+      if (gimbal_.calibrateZero()) {
+        debug_.println(F("# gimbal zero calibrated at current pose"));
+      } else {
+        debug_.println(F("# gimbal zero calibration failed: no motor online"));
+      }
+      break;
     case 'P':
       gps_.configure10Hz();
       debug_.println(F("# MAX-M10S configuration sent"));
       break;
-    case 'S':
-      if (line[1] == '0') {
-        simulation_.setMode(VirtualRemoteSource::Mode::OFF, millis());
-        debug_.println(F("# simulation OFF; E22 input selected"));
-      } else if (line[1] == '1') {
-        simulation_.setMode(
-            VirtualRemoteSource::Mode::REMOTE_AROUND_REAL_LOCAL, millis());
-        debug_.println(
-            F("# simulation S1: virtual remote around real GPS/barometer"));
-      } else if (line[1] == '2') {
-        simulation_.setMode(VirtualRemoteSource::Mode::FULL_BENCH, millis());
-        debug_.println(
-            F("# simulation S2: virtual local GPS/barometer + remote"));
-      } else if (line[1] == '3') {
-        simulation_.setMode(
-            VirtualRemoteSource::Mode::FIXED_ABSOLUTE_TARGET, millis());
-        debug_.print(F("# simulation S3: fixed target lat/lon/alt="));
-        debug_.print(static_cast<double>(fixed_target::LAT_I7) * 1.0e-7, 7);
-        debug_.print(',');
-        debug_.print(static_cast<double>(fixed_target::LON_I7) * 1.0e-7, 7);
-        debug_.print(',');
-        debug_.println(fixed_target::ALTITUDE_M, 1);
-      } else if (line[1] == 'R') {
-        simulation_.restart(millis());
-        debug_.println(F("# simulation dataset restarted"));
-      }
-      break;
     case '?':
       debug_.println(
-          F("# C=track, Z=stow, T0/T1=torque, P=GPS cfg, "
-            "S0=real E22, S1=moving fake remote, S2=full bench, "
-            "S3=fixed target, SR=restart"));
+          F("# C=track, Z=stow, T0/T1=torque, K=zero now, P=GPS cfg"));
       break;
   }
 }
@@ -291,16 +263,13 @@ bool TrackerApp::attitudeFresh(uint32_t nowMs) const {
 }
 
 const GpsFix& TrackerApp::localGpsInput() const {
-  return simulation_.usesVirtualLocal() ? simulation_.virtualLocalGps()
-                                        : gps_.fix();
+  return gps_.fix();
 }
 
 const BarometerSample& TrackerApp::localBarometerInput() const {
-  return simulation_.usesVirtualLocal()
-             ? simulation_.virtualLocalBarometer()
-             : barometer_.sample();
+  return barometer_.sample();
 }
 
 const RemoteTargetSample& TrackerApp::remoteInput() const {
-  return simulation_.enabled() ? simulation_.remote() : e22_.sample();
+  return e22_.sample();
 }

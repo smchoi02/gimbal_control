@@ -9,7 +9,6 @@
 #include "../sensors/bmp581_sensor.h"
 #include "../sensors/bno085_sensor.h"
 #include "../sensors/max_m10s_sensor.h"
-#include "../simulation/virtual_remote_source.h"
 #include "../storage/sd_logger.h"
 
 class TrackerApp {
@@ -27,7 +26,6 @@ class TrackerApp {
   E22Receiver e22_;
   GimbalController gimbal_;
   SdLogger logger_;
-  VirtualRemoteSource simulation_;
 
   TrackMode mode_ = TrackMode::STOW;
   RelativeTarget relative_;

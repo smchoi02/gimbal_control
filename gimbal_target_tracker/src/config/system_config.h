@@ -63,7 +63,15 @@ constexpr int16_t DXL_GOAL_CURRENT = 700;
 constexpr uint32_t DXL_PROFILE_VELOCITY = 60;
 constexpr int8_t DXL_TEMP_LIMIT_C = 65;
 
-// Mechanical and command limits
+// At boot, each detected motor's current physical position becomes its
+// gimbal 0 degree. Mount both axes at the intended forward/reference pose
+// before powering the tracker, or send K later to set the current pose as 0.
+constexpr bool AUTO_CALIBRATE_GIMBAL_ZERO_ON_BOOT = true;
+// false permits all calculated yaw/pitch angles. The DYNAMIXEL normal
+// position range (0..360 deg) remains enforced by goal normalization. Set
+// true only after entering verified mechanical limits below.
+constexpr bool ENFORCE_SOFT_GIMBAL_LIMITS = false;
+// Mechanical limits used only when ENFORCE_SOFT_GIMBAL_LIMITS is true.
 constexpr float YAW_MIN_DEG = -170.0f;
 constexpr float YAW_MAX_DEG = 170.0f;
 constexpr float PITCH_MIN_DEG = -10.0f;

@@ -34,6 +34,7 @@ bool GimbalController::begin() {
     dxl_.writeControlTableItem(PROFILE_VELOCITY, id,
                                cfg::DXL_PROFILE_VELOCITY);
   }
+  if (cfg::AUTO_CALIBRATE_GIMBAL_ZERO_ON_BOOT) calibrateZero();
   setTorque(true);
   return true;
 }
@@ -44,12 +45,14 @@ void GimbalController::command(float yawDeg, float pitchDeg, float dtSeconds) {
   const float maxStep = cfg::MAX_RATE_DEG_S * dtSeconds;
 
   const float normalizedYaw = wrapDeg(yawDeg);
-  float safeYaw =
-      clampValue(normalizedYaw, cfg::YAW_MIN_DEG, cfg::YAW_MAX_DEG);
-  float safePitch =
-      clampValue(pitchDeg, cfg::PITCH_MIN_DEG, cfg::PITCH_MAX_DEG);
-  if (safeYaw != normalizedYaw || safePitch != pitchDeg) {
-    state_.limitActive = true;
+  float safeYaw = normalizedYaw;
+  float safePitch = pitchDeg;
+  if (cfg::ENFORCE_SOFT_GIMBAL_LIMITS) {
+    safeYaw = clampValue(normalizedYaw, cfg::YAW_MIN_DEG, cfg::YAW_MAX_DEG);
+    safePitch = clampValue(pitchDeg, cfg::PITCH_MIN_DEG, cfg::PITCH_MAX_DEG);
+    if (safeYaw != normalizedYaw || safePitch != pitchDeg) {
+      state_.limitActive = true;
+    }
   }
 
   safeYaw = rateLimit(safeYaw, filteredYawDeg_, maxStep, &state_.limitActive);
@@ -62,14 +65,32 @@ void GimbalController::command(float yawDeg, float pitchDeg, float dtSeconds) {
 
   if (state_.yawOnline) {
     dxl_.setGoalPosition(cfg::YAW_DXL_ID,
-                         cfg::YAW_SIGN * safeYaw + cfg::DXL_CENTER_DEG,
+                         servoDeg(cfg::YAW_SIGN * safeYaw + yawZeroDeg_),
                          UNIT_DEGREE);
   }
   if (state_.pitchOnline) {
     dxl_.setGoalPosition(cfg::PITCH_DXL_ID,
-                         cfg::PITCH_SIGN * safePitch + cfg::DXL_CENTER_DEG,
+                         servoDeg(cfg::PITCH_SIGN * safePitch + pitchZeroDeg_),
                          UNIT_DEGREE);
   }
+}
+
+bool GimbalController::calibrateZero() {
+  if (!state_.healthy) return false;
+  if (state_.yawOnline) {
+    yawZeroDeg_ = servoDeg(
+        dxl_.getPresentPosition(cfg::YAW_DXL_ID, UNIT_DEGREE));
+  }
+  if (state_.pitchOnline) {
+    pitchZeroDeg_ = servoDeg(
+        dxl_.getPresentPosition(cfg::PITCH_DXL_ID, UNIT_DEGREE));
+  }
+  // Prevent a calibration from being followed by an old rate-limited target.
+  filteredYawDeg_ = 0.0f;
+  filteredPitchDeg_ = 0.0f;
+  state_.yawCommandDeg = 0.0f;
+  state_.pitchCommandDeg = 0.0f;
+  return true;
 }
 
 void GimbalController::setTorque(bool enabled) {
@@ -89,8 +110,8 @@ void GimbalController::pollFeedback() {
   if (state_.yawOnline) {
     state_.yawPresentDeg =
         cfg::YAW_SIGN *
-        (dxl_.getPresentPosition(cfg::YAW_DXL_ID, UNIT_DEGREE) -
-         cfg::DXL_CENTER_DEG);
+        wrapDeg(dxl_.getPresentPosition(cfg::YAW_DXL_ID, UNIT_DEGREE) -
+                yawZeroDeg_);
     state_.yawCurrentRaw =
         dxl_.readControlTableItem(PRESENT_CURRENT, cfg::YAW_DXL_ID);
     state_.yawTemperatureC =
@@ -99,8 +120,8 @@ void GimbalController::pollFeedback() {
   if (state_.pitchOnline) {
     state_.pitchPresentDeg =
         cfg::PITCH_SIGN *
-        (dxl_.getPresentPosition(cfg::PITCH_DXL_ID, UNIT_DEGREE) -
-         cfg::DXL_CENTER_DEG);
+        wrapDeg(dxl_.getPresentPosition(cfg::PITCH_DXL_ID, UNIT_DEGREE) -
+                pitchZeroDeg_);
     state_.pitchCurrentRaw =
         dxl_.readControlTableItem(PRESENT_CURRENT, cfg::PITCH_DXL_ID);
     state_.pitchTemperatureC =
@@ -122,6 +143,12 @@ void GimbalController::pollFeedback() {
 float GimbalController::wrapDeg(float angle) {
   while (angle > 180.0f) angle -= 360.0f;
   while (angle <= -180.0f) angle += 360.0f;
+  return angle;
+}
+
+float GimbalController::servoDeg(float angle) {
+  while (angle < 0.0f) angle += 360.0f;
+  while (angle >= 360.0f) angle -= 360.0f;
   return angle;
 }
 

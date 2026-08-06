@@ -4,7 +4,6 @@
 
 #include "../src/comm/remote_packet.h"
 #include "../src/math/target_geometry.h"
-#include "../src/simulation/virtual_remote_source.h"
 
 static bool nearValue(float actual, float expected, float tolerance) {
   return std::fabs(actual - expected) <= tolerance;
@@ -49,9 +48,6 @@ int main() {
   local.latI7 = 375000000;
   local.lonI7 = 1270000000;
   local.valid = true;
-  BarometerSample localBaro;
-  localBaro.pressurePa = 101325.0f;
-  localBaro.valid = true;
   RemoteTargetSample remote;
   remote.latI7 = local.latI7 + 898;  // approximately 10 m north
   remote.lonI7 = local.lonI7;
@@ -69,21 +65,6 @@ int main() {
   assert(target_geometry::pointingAngles(ned, identity, &target));
   assert(nearValue(target.yawDeg, 0.0f, 0.01f));
   assert(nearValue(target.pitchDeg, 0.0f, 0.01f));
-
-  VirtualRemoteSource simulation;
-  simulation.setMode(VirtualRemoteSource::Mode::FULL_BENCH, 1000);
-  GpsFix noRealGps;
-  BarometerSample noRealBarometer;
-  assert(simulation.update(1000, noRealGps, noRealBarometer));
-  assert(simulation.virtualLocalGps().valid);
-  assert(simulation.virtualLocalBarometer().valid);
-  assert(simulation.remote().valid);
-  float simulatedNed[3];
-  assert(target_geometry::relativeNed(simulation.virtualLocalGps(),
-                                      simulation.remote(), simulatedNed));
-  assert(nearValue(simulatedNed[0], 150.0f, 0.2f));
-  assert(nearValue(simulatedNed[1], 0.0f, 0.2f));
-  assert(nearValue(simulatedNed[2], 0.0f, 0.2f));
 
   std::puts("test_core: all checks passed");
   return 0;

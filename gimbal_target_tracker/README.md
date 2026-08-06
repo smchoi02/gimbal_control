@@ -11,7 +11,7 @@ OpenRB-150 기반 표적 추적 짐벌 펌웨어다.
 Arduino IDE에서 `gimbal_target_tracker.ino`를 열어 OpenRB-150 대상으로 빌드한다.
 ICM-20948 관련 선택 분기와 드라이버는 제거되었으며, 이 프로젝트의 IMU는 BNO085만 사용한다.
 
-배선은 [WIRING.md](WIRING.md), 송신기 없이 하는 시험은 [SIMULATION.md](SIMULATION.md)를 참고한다.
+배선은 [WIRING.md](WIRING.md)를 참고한다. 이 펌웨어는 실제 E22 수신 패킷만 사용한다.
 
 ## 동작
 
@@ -68,8 +68,6 @@ E22-900T22S는 M0/M1을 부동 상태로 두면 안 된다. 정상 투명 전송
 - `Z`: 추적 비활성화 및 STOW
 - `T0` / `T1`: DYNAMIXEL 토크 OFF / ON
 - `P`: MAX-M10S 10 Hz 설정 재전송
-- `S0`: 실제 E22 입력 선택
-- `S1`, `S2`, `S3`, `SR`: 시뮬레이션 제어
 - `?`: 명령 도움말
 
 1초 상태 출력의 `imu_hw/report/src=1/1/G`는 BNO085 Game Rotation Vector가 정상이라는 뜻이다. `e22_ready=0`은 AUX를 연결한 경우 모듈이 기동 중이거나 busy 상태임을 뜻한다.
@@ -77,6 +75,6 @@ E22-900T22S는 M0/M1을 부동 상태로 두면 안 된다. 정상 투명 전송
 ## PC 코어 테스트
 
 ```bash
-g++ -std=c++17 -I./src tests/test_core.cpp src/simulation/virtual_remote_source.cpp -o tests/test_core
+g++ -std=c++17 -I./src tests/test_core.cpp -o tests/test_core
 ./tests/test_core
 ```
