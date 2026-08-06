@@ -45,6 +45,19 @@ float aglM = NAN;
 uint8_t seq = 0;
 uint32_t tBmp = 0, tTx = 0, tDbg = 0;
 
+// Last accepted fix. A dropout must never put (0, 0) on the wire: with the
+// receiver configured to trust the packet, that reads as a real position in
+// the Gulf of Guinea and slews the gimbal thousands of kilometres away. Hold
+// the last known coordinates and report the loss through fix type instead.
+int32_t lastLat_i7 = 0;
+int32_t lastLon_i7 = 0;
+bool haveLastFix = false;
+
+// Most recent transmitted packet, reused by the USB monitor so that the debug
+// path does not build a second packet and consume another sequence number.
+uint8_t lastTxPacket[34] = {};
+bool haveTxPacket = false;
+
 uint16_t rdU2(const uint8_t *p) {
   return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
 }
@@ -256,12 +269,20 @@ bool gpsFresh() {
 void buildRkPacket(uint8_t out[RK_LEN]) {
   bool ok = gpsFresh();
 
+  if (ok) {
+    lastLat_i7 = fix.lat_i7;
+    lastLon_i7 = fix.lon_i7;
+    haveLastFix = true;
+  }
+
   wrU2(out + 0, 0x4B52);          // bytes: 'R' 'K'
   out[2] = seq++;
   out[3] = ok ? fix.fixType : 0;
   wrU4(out + 4, ok ? fix.iTOW : 0);
-  wrI4(out + 8, ok ? fix.lat_i7 : 0);
-  wrI4(out + 12, ok ? fix.lon_i7 : 0);
+  // Held coordinates on dropout. Still (0, 0) before the very first fix, but
+  // fix type 0 keeps the receiver from using it.
+  wrI4(out + 8, lastLat_i7);
+  wrI4(out + 12, lastLon_i7);
   wrI4(out + 16, mm(aglM));       // BMP581 AGL, not GPS hMSL
   wrI4(out + 20, ok ? fix.velN_mms : 0);
   wrI4(out + 24, ok ? fix.velE_mms : 0);
@@ -328,16 +349,17 @@ void loop() {
 
   if (now - tTx >= TX_DT_MS) {
     tTx = now;
-    uint8_t packet[RK_LEN];
-    buildRkPacket(packet);
-    loraSerial.write(packet, RK_LEN);
+    buildRkPacket(lastTxPacket);
+    haveTxPacket = true;
+    loraSerial.write(lastTxPacket, RK_LEN);
     loraSerial.flush();
   }
 
-  if (now - tDbg >= DBG_DT_MS) {
+  // Print the packet that was actually sent. Building a second one here would
+  // consume another sequence number, and the receiver would count every real
+  // packet as a lost one.
+  if (haveTxPacket && now - tDbg >= DBG_DT_MS) {
     tDbg = now;
-    uint8_t packet[RK_LEN];
-    buildRkPacket(packet);
-    printStatus(packet);
+    printStatus(lastTxPacket);
   }
 }

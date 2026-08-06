@@ -33,6 +33,14 @@ uint8_t seq = 0;
 uint32_t tBmp = 0;
 uint32_t tPrint = 0;
 
+// Last accepted fix. A dropout must never put (0, 0) on the wire: the
+// receiver would treat it as a real position in the Gulf of Guinea and slew
+// the gimbal thousands of kilometres away. Hold the last known coordinates
+// instead and report the loss through fix type and the STALE_POS flag.
+int32_t lastLatI7 = 0;
+int32_t lastLonI7 = 0;
+bool haveLastFix = false;
+
 uint16_t crc16(const uint8_t *d, size_t n) {
   uint16_t c = 0xFFFF;
   for (size_t i = 0; i < n; i++) {
@@ -124,8 +132,16 @@ void buildPacket(uint8_t out[PACKET_LEN]) {
   const bool fix = gpsOk();
   const bool barometerOk = isfinite(pressurePa) && isfinite(temperatureC) &&
                            pressurePa >= 30000.0f && pressurePa <= 125000.0f;
-  int32_t lat = fix ? rawI7(gps.location.rawLat()) : 0;
-  int32_t lon = fix ? rawI7(gps.location.rawLng()) : 0;
+
+  if (fix) {
+    lastLatI7 = rawI7(gps.location.rawLat());
+    lastLonI7 = rawI7(gps.location.rawLng());
+    haveLastFix = true;
+  }
+  // Held coordinates on dropout. Still (0, 0) before the very first fix, but
+  // fix type 0 keeps the receiver from using it.
+  const int32_t lat = lastLatI7;
+  const int32_t lon = lastLonI7;
   const uint32_t pressurePaX10 =
       barometerOk ? static_cast<uint32_t>(pressurePa * 10.0f + 0.5f) : 0;
   const float temperatureX100 = temperatureC * 100.0f;
@@ -146,7 +162,9 @@ void buildPacket(uint8_t out[PACKET_LEN]) {
   wrU4(out + 16, pressurePaX10);
   wrU2(out + 20, static_cast<uint16_t>(temperatureCX100));
   out[22] = fix ? 3 : 0;
-  out[23] = (fix ? 0x01 : 0x00) | (barometerOk ? 0x02 : 0x00);
+  // 0x01 fix, 0x02 barometer, 0x04 position is held from an earlier fix.
+  out[23] = (fix ? 0x01 : 0x00) | (barometerOk ? 0x02 : 0x00) |
+            ((!fix && haveLastFix) ? 0x04 : 0x00);
   out[24] = 0;
   wrU2(out + 25, crc16(out, 25));
 }
@@ -167,10 +185,11 @@ void printPacket(const uint8_t p[PACKET_LEN]) {
   Serial.print(p[3]);
   Serial.print(F(", fix="));
   Serial.print(p[22]);
+  // Print what actually went on the wire, not the raw TinyGPS++ state.
   Serial.print(F(", lat="));
-  Serial.print(gps.location.isValid() ? gps.location.lat() : 0.0, 7);
+  Serial.print((double)lastLatI7 * 1.0e-7, 7);
   Serial.print(F(", lon="));
-  Serial.print(gps.location.isValid() ? gps.location.lng() : 0.0, 7);
+  Serial.print((double)lastLonI7 * 1.0e-7, 7);
   Serial.print(F(", age_ms="));
   Serial.print(gps.location.isValid() ? gps.location.age() : 999999UL);
   Serial.print(F(", sats="));
