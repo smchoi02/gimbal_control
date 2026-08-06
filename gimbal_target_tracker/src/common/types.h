@@ -6,7 +6,8 @@ enum class TrackMode : uint8_t {
   STOW = 0,
   TRACK = 1,
   HOLD_LAST_DIRECTION = 2,
-  FAULT = 3
+  FAULT = 3,
+  MANUAL = 4
 };
 
 struct AttitudeSample {
