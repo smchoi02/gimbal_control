@@ -1,6 +1,6 @@
 // E22-900T22S receive validation for the real trs_test.ino transmitter.
 // Standalone sketch: no project-relative includes are required.
-// Expected packet: RK, 34 bytes, little-endian, CRC-16/CCITT-FALSE.
+// Expected packet: RK, 58 bytes, little-endian, CRC-16/CCITT-FALSE.
 // Serial Monitor: 115200 baud. E22 UART: Serial3, 9600 baud.
 
 #include <Arduino.h>
@@ -8,7 +8,8 @@
 
 #define E22_SERIAL Serial3
 constexpr uint32_t E22_UART_BAUD = 9600;
-constexpr size_t RK_PACKET_SIZE = 34;
+constexpr size_t RK_PACKET_SIZE = 58;
+constexpr size_t RK_CRC_OFFSET = 56;
 
 struct RkPacket {
   uint8_t sequence = 0;
@@ -20,6 +21,12 @@ struct RkPacket {
   int32_t velNMmS = 0;
   int32_t velEMmS = 0;
   int32_t velDMmS = 0;
+  uint8_t imuFlags = 0;
+  uint8_t quatAcc = 0;
+  uint16_t imuAgeMs = 0;
+  int16_t accelMps2X100[3] = {};
+  int16_t gyroDpsX10[3] = {};
+  int16_t quaternionQ14[4] = {};
 };
 
 uint16_t crc16CcittFalse(const uint8_t* data, size_t length) {
@@ -46,6 +53,10 @@ uint32_t readU32(const uint8_t* in) {
          (static_cast<uint32_t>(in[3]) << 24);
 }
 
+int16_t readI16(const uint8_t* in) {
+  return static_cast<int16_t>(readU16(in));
+}
+
 void decodeRk(const uint8_t* in, RkPacket* packet) {
   packet->sequence = in[2];
   packet->fixType = in[3];
@@ -56,6 +67,16 @@ void decodeRk(const uint8_t* in, RkPacket* packet) {
   packet->velNMmS = static_cast<int32_t>(readU32(in + 20));
   packet->velEMmS = static_cast<int32_t>(readU32(in + 24));
   packet->velDMmS = static_cast<int32_t>(readU32(in + 28));
+  packet->imuFlags = in[32];
+  packet->quatAcc = in[33];
+  packet->imuAgeMs = readU16(in + 34);
+  for (uint8_t i = 0; i < 3; ++i) {
+    packet->accelMps2X100[i] = readI16(in + 36 + 2 * i);
+    packet->gyroDpsX10[i] = readI16(in + 42 + 2 * i);
+  }
+  for (uint8_t i = 0; i < 4; ++i) {
+    packet->quaternionQ14[i] = readI16(in + 48 + 2 * i);
+  }
 }
 
 class RkParser {
@@ -77,7 +98,8 @@ class RkParser {
     }
     if (count_ < RK_PACKET_SIZE) return false;
 
-    if (crc16CcittFalse(buffer_, 32) == readU16(buffer_ + 32)) {
+    if (crc16CcittFalse(buffer_, RK_CRC_OFFSET) ==
+        readU16(buffer_ + RK_CRC_OFFSET)) {
       decodeRk(buffer_, packet);
       ++packetsOk;
       if (haveSequence_) {
@@ -139,6 +161,12 @@ void printPacket(const RkPacket& packet) {
   Serial.print(static_cast<float>(packet.velEMmS) * 0.001f, 3);
   Serial.print('/');
   Serial.print(static_cast<float>(packet.velDMmS) * 0.001f, 3);
+  Serial.print(F(" imu_flags/quat_acc/age_ms="));
+  Serial.print(packet.imuFlags, HEX);
+  Serial.print('/');
+  Serial.print(packet.quatAcc);
+  Serial.print('/');
+  Serial.print(packet.imuAgeMs);
   Serial.print(F(" valid="));
   Serial.println(valid ? 1 : 0);
 }

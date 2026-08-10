@@ -32,6 +32,11 @@ class TrackerApp {
   float lastDirectionNed_[3] = {1.0f, 0.0f, 0.0f};
   bool haveLastDirection_ = false;
   bool trackingEnabled_ = true;
+  // Captured while the gimbal is aimed at its 0°/0° reference pose.
+  float localImuReferenceQ_[4] = {1.0f, 0.0f, 0.0f, 0.0f};
+  float remoteImuReferenceQ_[4] = {1.0f, 0.0f, 0.0f, 0.0f};
+  bool trackingReferenceReady_ = false;
+  bool remoteImuReferenceReady_ = false;
 
   uint32_t lastControlUs_ = 0;
   uint32_t lastBaroUs_ = 0;
@@ -49,6 +54,7 @@ class TrackerApp {
   void handleCommand(char* line);
   bool trackingInputsFresh(uint32_t nowMs) const;
   bool attitudeFresh(uint32_t nowMs) const;
+  bool captureImuReference();
   const GpsFix& localGpsInput() const;
   const BarometerSample& localBarometerInput() const;
   const RemoteTargetSample& remoteInput() const;

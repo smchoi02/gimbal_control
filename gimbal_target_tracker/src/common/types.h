@@ -49,6 +49,12 @@ struct RemoteTargetSample {
   float velNMps = 0.0f;
   float velEMps = 0.0f;
   float velDMps = 0.0f;
+  uint8_t imuFlags = 0;
+  uint8_t quatAccuracy = 0;
+  uint16_t imuAgeMs = 0;
+  float accelMps2[3] = {};
+  float gyroDps[3] = {};
+  float quaternion[4] = {1.0f, 0.0f, 0.0f, 0.0f};
   uint8_t fixType = 0;
   uint32_t timestampMs = 0;
   bool valid = false;

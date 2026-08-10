@@ -17,6 +17,21 @@ inline void normalizeQuaternion(float q[4]) {
   }
 }
 
+// Returns reference^-1 * current. Both inputs describe body -> world, so the
+// result describes the current body orientation in the reference body frame.
+inline void relativeToReference(const float reference[4], const float current[4],
+                                float out[4]) {
+  const float rw = reference[0], rx = -reference[1];
+  const float ry = -reference[2], rz = -reference[3];
+  const float cw = current[0], cx = current[1];
+  const float cy = current[2], cz = current[3];
+  out[0] = rw * cw - rx * cx - ry * cy - rz * cz;
+  out[1] = rw * cx + rx * cw + ry * cz - rz * cy;
+  out[2] = rw * cy - rx * cz + ry * cw + rz * cx;
+  out[3] = rw * cz + rx * cy - ry * cx + rz * cw;
+  normalizeQuaternion(out);
+}
+
 inline void quaternionToBodyToNed(const float q[4], float r[3][3]) {
   const float w = q[0], x = q[1], y = q[2], z = q[3];
   r[0][0] = 1 - 2 * (y * y + z * z);

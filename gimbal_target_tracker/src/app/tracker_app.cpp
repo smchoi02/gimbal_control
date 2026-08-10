@@ -114,11 +114,21 @@ void TrackerApp::controlTick(uint32_t nowMs, float dtSeconds) {
   }
 
   if (trackingInputsFresh(nowMs)) {
+    if (!trackingReferenceReady_) {
+      captureImuReference();
+      mode_ = TrackMode::STOW;
+      relative_.valid = false;
+      gimbal_.stow(dtSeconds);
+      return;
+    }
     float targetNed[3];
     RelativeTarget calculated;
+    float relativeAttitudeQ[4];
+    attitude::relativeToReference(localImuReferenceQ_, imu_.sample().q,
+                                  relativeAttitudeQ);
     if (target_geometry::relativeNed(localGpsInput(), remoteInput(),
                                      targetNed) &&
-        target_geometry::pointingAngles(targetNed, imu_.sample().q,
+        target_geometry::pointingAngles(targetNed, relativeAttitudeQ,
                                         &calculated)) {
       relative_ = calculated;
       target_geometry::normalizeDirection(targetNed, lastDirectionNed_);
@@ -184,6 +194,10 @@ void TrackerApp::printStatus(uint32_t nowMs) {
                        cfg::REMOTE_TIMEOUT_MS));
   debug_.print(F(" e22_ready="));
   debug_.print(e22_.moduleReady());
+  debug_.print(F(" imu_ref/remote_imu_ref="));
+  debug_.print(trackingReferenceReady_);
+  debug_.print('/');
+  debug_.print(remoteImuReferenceReady_);
   debug_.print(F(" range_m="));
   debug_.print(relative_.rangeM, 1);
   debug_.print(F(" cmd="));
@@ -238,13 +252,20 @@ void TrackerApp::handleCommand(char* line) {
         debug_.println(F("# gimbal zero calibration failed: no motor online"));
       }
       break;
+    case 'R':
+      trackingReferenceReady_ = false;
+      remoteImuReferenceReady_ = false;
+      haveLastDirection_ = false;
+      relative_.valid = false;
+      debug_.println(F("# IMU reference reset; waiting for real RK packet"));
+      break;
     case 'P':
       gps_.configure10Hz();
       debug_.println(F("# MAX-M10S configuration sent"));
       break;
     case '?':
       debug_.println(
-          F("# C=track, Z=stow, T0/T1=torque, K=zero now, P=GPS cfg"));
+          F("# C=track, Z=stow, T0/T1=torque, K=zero now, R=reference reset, P=GPS cfg"));
       break;
   }
 }
@@ -260,6 +281,27 @@ bool TrackerApp::trackingInputsFresh(uint32_t nowMs) const {
 bool TrackerApp::attitudeFresh(uint32_t nowMs) const {
   return imu_.sample().valid &&
          isFresh(nowMs, imu_.sample().timestampMs, cfg::IMU_TIMEOUT_MS);
+}
+
+bool TrackerApp::captureImuReference() {
+  if (!localGpsInput().valid || !remoteInput().valid || !imu_.sample().valid) {
+    return false;
+  }
+  for (uint8_t i = 0; i < 4; ++i) {
+    localImuReferenceQ_[i] = imu_.sample().q[i];
+  }
+  attitude::normalizeQuaternion(localImuReferenceQ_);
+  remoteImuReferenceReady_ = (remoteInput().imuFlags & 0x04u) != 0;
+  if (remoteImuReferenceReady_) {
+    for (uint8_t i = 0; i < 4; ++i) {
+      remoteImuReferenceQ_[i] = remoteInput().quaternion[i];
+    }
+    attitude::normalizeQuaternion(remoteImuReferenceQ_);
+  }
+  trackingReferenceReady_ = true;
+  haveLastDirection_ = false;
+  debug_.println(F("# local IMU reference captured; target starts at yaw/pitch 0/0"));
+  return true;
 }
 
 const GpsFix& TrackerApp::localGpsInput() const {

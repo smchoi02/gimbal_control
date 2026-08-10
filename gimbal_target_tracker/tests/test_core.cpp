@@ -21,6 +21,12 @@ int main() {
   sent.velNMmS = 1200;
   sent.velEMmS = -500;
   sent.velDMmS = 300;
+  sent.imuFlags = 0x07;
+  sent.quatAccuracy = 3;
+  sent.imuAgeMs = 20;
+  sent.accelMps2X100[0] = 981;
+  sent.gyroDpsX10[2] = -123;
+  sent.quaternionQ14[0] = 16384;
   sent.fixType = 3;
 
   uint8_t wire[PACKET_SIZE];
@@ -32,6 +38,8 @@ int main() {
   assert(decoded.latI7 == sent.latI7);
   assert(decoded.lonI7 == sent.lonI7);
   assert(decoded.aglMm == sent.aglMm);
+  assert(decoded.imuFlags == sent.imuFlags);
+  assert(decoded.gyroDpsX10[2] == sent.gyroDpsX10[2]);
 
   Parser parser;
   Payload parsed;
@@ -58,7 +66,8 @@ int main() {
   assert(target_geometry::relativeNed(local, remote, ned));
   assert(nearValue(ned[0], 10.0f, 0.1f));
   assert(nearValue(ned[1], 0.0f, 0.01f));
-  assert(nearValue(ned[2], 0.0f, 0.01f));
+  assert(nearValue(ned[2], -100.0f, 0.01f));
+
 
   const float identity[4] = {1, 0, 0, 0};
   RelativeTarget target;
