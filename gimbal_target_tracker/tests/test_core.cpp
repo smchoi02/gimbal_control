@@ -21,13 +21,13 @@ int main() {
   sent.velNMmS = 1200;
   sent.velEMmS = -500;
   sent.velDMmS = 300;
-  sent.fixType = 3;
+  sent.satelliteCount = 8;
 
   uint8_t wire[PACKET_SIZE];
   assert(encode(sent, wire, sizeof(wire)) == PACKET_SIZE);
   assert(PACKET_SIZE == 34 && CRC_OFFSET == 32);
   assert(wire[0] == 'R' && wire[1] == 'K');
-  assert(wire[2] == sent.sequence && wire[3] == sent.fixType);
+  assert(wire[2] == sent.sequence && wire[3] == sent.satelliteCount);
   assert(readU32(wire + 4) == sent.iTowMs);
   assert(static_cast<int32_t>(readU32(wire + 8)) == sent.latI7);
   assert(static_cast<int32_t>(readU32(wire + 12)) == sent.lonI7);
@@ -38,6 +38,8 @@ int main() {
   assert(decoded.latI7 == sent.latI7);
   assert(decoded.lonI7 == sent.lonI7);
   assert(decoded.aglMm == sent.aglMm);
+  assert(decoded.satelliteCount == sent.satelliteCount);
+  assert(toSample(decoded, 0).valid);
   assert(readU16(wire + CRC_OFFSET) == crc16CcittFalse(wire, CRC_OFFSET));
 
   Parser parser;

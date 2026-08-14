@@ -47,13 +47,15 @@ def number(value: str, field: str) -> float:
 
 
 def valid_remote(row: dict[str, str]) -> bool:
-    """Accept only usable position records from the 34-byte RK transmitter."""
-    return (
-        row.get("remote_valid") == "1"
-        and integer(row.get("remote_fix_type", "0"), "remote_fix_type") in (3, 4)
-        and integer(row.get("remote_lat_i7", "0"), "remote_lat_i7") != 0
-        and integer(row.get("remote_lon_i7", "0"), "remote_lon_i7") != 0
-    )
+    """Accept usable position records from current and legacy RK CSV logs."""
+    if row.get("remote_valid") != "1":
+        return False
+    if "remote_satellites" in row:
+        quality_ok = integer(row["remote_satellites"], "remote_satellites") >= 4
+    else:
+        quality_ok = integer(row.get("remote_fix_type", "0"), "remote_fix_type") in (3, 4)
+    return (quality_ok and integer(row.get("remote_lat_i7", "0"), "remote_lat_i7") != 0
+            and integer(row.get("remote_lon_i7", "0"), "remote_lon_i7") != 0)
 
 
 def first_fixed_position(rows: Iterable[dict[str, str]]) -> tuple[int, int]:
@@ -71,8 +73,7 @@ def load_points(path: Path, fixed_lat_i7: int | None,
                 fixed_lon_i7: int | None) -> tuple[list[ReplayPoint], tuple[int, int]]:
     with path.open("r", newline="", encoding="utf-8-sig") as source:
         rows = list(csv.DictReader(source))
-    required = {"t_ms", "remote_valid", "remote_fix_type", "remote_lat_i7",
-                "remote_lon_i7", "remote_agl_m"}
+    required = {"t_ms", "remote_valid", "remote_lat_i7", "remote_lon_i7", "remote_agl_m"}
     if not rows or not required.issubset(rows[0]):
         missing = ", ".join(sorted(required - set(rows[0] if rows else {})))
         raise ValueError(f"not a gimbal tracker CSV; missing: {missing}")

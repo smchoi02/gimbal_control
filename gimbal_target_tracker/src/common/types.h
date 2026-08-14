@@ -57,7 +57,7 @@ struct RemoteTargetSample {
   float accelMps2[3] = {};
   float gyroDps[3] = {};
   float quaternion[4] = {1.0f, 0.0f, 0.0f, 0.0f};
-  uint8_t fixType = 0;
+  uint8_t satelliteCount = 0;
   uint32_t timestampMs = 0;
   bool valid = false;
 };

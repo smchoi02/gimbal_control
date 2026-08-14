@@ -9,9 +9,9 @@ constexpr uint32_t CONTROL_PERIOD_US = 20000;   // 50 Hz
 constexpr uint32_t BARO_PERIOD_US = 20000;      // 50 Hz
 constexpr uint32_t GPS_POLL_PERIOD_US = 10000;  // 100 Hz bus polling, NAV-PVT is 10 Hz
 constexpr uint32_t LOG_PERIOD_US = 100000;      // 10 Hz
-// Match trs_test.ino TX_DT_MS: print one compact health line at the 10 Hz
+// Match trs_test.ino TX_DT_MS: print one compact health line at the 1 Hz
 // transmitter packet rate.
-constexpr uint32_t STATUS_PERIOD_MS = 100;
+constexpr uint32_t STATUS_PERIOD_MS = 1000;
 // Keep the gimbal at its user-set pose while gathering the initial GPS/IMU
 // alignment. The pose aimed at the transmitter becomes yaw/pitch 0/0.
 constexpr uint32_t INITIAL_ALIGNMENT_MS = 10000;
@@ -24,7 +24,7 @@ constexpr uint32_t REMOTE_TIMEOUT_MS = 1000;
 // true: CRC와 RK packet structure are valid이면 sender GPS fix/AGL semantic
 // validation failure도 원격 추적 입력으로 사용한다. 송신 GPS가 아직 fix=0을
 // 보내는 통신 시험용 옵션이다.
-constexpr bool REMOTE_FORCE_USE_RECEIVED_DATA = true;
+constexpr bool REMOTE_FORCE_USE_RECEIVED_DATA = false;
 
 // Shared I2C bus: OpenRB-150 D11=SDA, D12=SCL.
 constexpr uint32_t I2C_CLOCK_HZ = 400000;

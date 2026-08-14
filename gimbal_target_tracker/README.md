@@ -46,7 +46,7 @@ E22-900T22S는 M0/M1을 부동 상태로 두면 안 된다. 정상 투명 전송
 |---:|---:|---|
 | 0 | 2 | ASCII `RK` |
 | 2 | 1 | sequence |
-| 3 | 1 | GPS fix type |
+| 3 | 1 | transmitter GPS satellite count |
 | 4 | 4 | temporary iTOW ms |
 | 8 | 4 | latitude, signed `1e-7 deg` |
 | 12 | 4 | longitude, signed `1e-7 deg` |

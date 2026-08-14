@@ -30,7 +30,7 @@ void SdLogger::writeHeader() {
         "local_gps_valid,local_itow_ms,local_lat_i7,local_lon_i7,"
         "local_hmsl_mm,local_fix_type,local_num_sv,"
         "remote_valid,remote_seq,remote_sender_ms,remote_lat_i7,remote_lon_i7,"
-        "remote_agl_m,remote_vel_n_mps,remote_vel_e_mps,remote_vel_d_mps,remote_fix_type,"
+        "remote_agl_m,remote_vel_n_mps,remote_vel_e_mps,remote_vel_d_mps,remote_satellites,"
         "remote_imu_flags,remote_quat_acc,remote_imu_age_ms,"
         "remote_ax,remote_ay,remote_az,remote_gx,remote_gy,remote_gz,"
         "remote_qw,remote_qx,remote_qy,remote_qz,"
@@ -83,7 +83,7 @@ void SdLogger::log(uint32_t nowMs, TrackMode mode,
   CSV_VALUE(remote.velNMps, 3);
   CSV_VALUE(remote.velEMps, 3);
   CSV_VALUE(remote.velDMps, 3);
-  CSV_VALUE(remote.fixType);
+  CSV_VALUE(remote.satelliteCount);
   CSV_VALUE(remote.imuFlags);
   CSV_VALUE(remote.quatAccuracy);
   CSV_VALUE(remote.imuAgeMs);

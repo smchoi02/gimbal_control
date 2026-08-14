@@ -1,280 +1,285 @@
 #include <Wire.h>
 #include <SoftwareSerial.h>
-#include <TinyGPS++.h>
 #include "SparkFun_BMP581_Arduino_Library.h"
 #include <math.h>
-#include <stdint.h>
+#include <string.h>
+#include <stdlib.h>
 
-// MAX-M10S TX -> D8, optional RX <- D9
-const uint8_t GPS_RX = 8;
-const uint8_t GPS_TX = 9;
-const uint8_t LORA_RX = 10;
-const uint8_t LORA_TX = 11;
-const uint32_t GPS_BAUD = 9600;
-const uint32_t LORA_BAUD = 9600;
-const uint32_t USB_BAUD = 115200;
+SoftwareSerial gpsSerial(8, 9);     // MAX-M10S TX -> Uno D8
+SoftwareSerial loraSerial(10, 11); // Uno D11(TX) -> LoRa RX
 
-const uint32_t BMP_DT_MS = 100;
-const uint32_t TX_DT_MS = 100;          // 10 Hz LoRa TX. Try 50 for 20 Hz if the E22 air rate is high enough.
-const uint32_t DBG_DT_MS = 100;        // USB serial monitor print rate
-const uint32_t INIT_BEACON_DT_MS = 500; // LoRa text status while setup is running
-const uint32_t GPS_MAX_AGE_MS = 3000;
-const size_t PACKET_LEN = 34;
-const bool LORA_ASCII_TEST = false; // PuTTY link check. Set false for packet-only TX.
-
-SoftwareSerial gpsSerial(GPS_RX, GPS_TX);
-SoftwareSerial loraSerial(LORA_RX, LORA_TX);
-TinyGPSPlus gps;
 BMP581 bmp;
 
-float p0Pa = NAN;
-float aglM = NAN;
-uint8_t seq = 0;
-uint32_t tBmp = 0;
-uint32_t tTx = 0;
-uint32_t tDbg = 0;
+const uint32_t GPS_BAUD = 9600;
+const uint32_t LORA_BAUD = 9600;
+const uint32_t TX_DT_MS = 1000;
+const uint32_t BMP_DT_MS = 100;
+const uint32_t GPS_MAX_AGE_MS = 3000;
+const uint8_t PACKET_LEN = 34;
 
-uint16_t crc16(const uint8_t *d, size_t n) {
-  uint16_t c = 0xFFFF;
-  for (size_t i = 0; i < n; i++) {
-    c ^= (uint16_t)d[i] << 8;
-    for (uint8_t b = 0; b < 8; b++) {
-      c = (c & 0x8000) ? (uint16_t)((c << 1) ^ 0x1021) : (uint16_t)(c << 1);
+struct {
+  bool valid;
+  uint8_t satellites;
+  float lat;
+  float lon;
+  float mslAltM;
+  uint32_t utcMs;
+  uint32_t lastGgaMs;
+} gps;
+
+char line[100];
+byte lineIndex = 0;
+
+bool bmpReady = false;
+float groundPressurePa = NAN;
+float bmpAglM = 0.0f;
+
+uint8_t sequence = 0;
+uint32_t lastTxMs = 0;
+uint32_t lastBmpMs = 0;
+
+uint16_t crc16(const uint8_t *data, uint8_t length) {
+  uint16_t crc = 0xFFFF;
+
+  while (length--) {
+    crc ^= (uint16_t)(*data++) << 8;
+
+    for (uint8_t i = 0; i < 8; i++) {
+      crc = (crc & 0x8000) ? (uint16_t)((crc << 1) ^ 0x1021)
+                            : (uint16_t)(crc << 1);
     }
   }
-  return c;
+
+  return crc;
 }
 
-void wrU2(uint8_t *p, uint16_t v) {
-  p[0] = (uint8_t)v;
-  p[1] = (uint8_t)(v >> 8);
+void writeU16(uint8_t *p, uint16_t value) {
+  p[0] = (uint8_t)value;
+  p[1] = (uint8_t)(value >> 8);
 }
 
-void wrU4(uint8_t *p, uint32_t v) {
-  p[0] = (uint8_t)v;
-  p[1] = (uint8_t)(v >> 8);
-  p[2] = (uint8_t)(v >> 16);
-  p[3] = (uint8_t)(v >> 24);
+void writeU32(uint8_t *p, uint32_t value) {
+  p[0] = (uint8_t)value;
+  p[1] = (uint8_t)(value >> 8);
+  p[2] = (uint8_t)(value >> 16);
+  p[3] = (uint8_t)(value >> 24);
 }
 
-void wrI4(uint8_t *p, int32_t v) {
-  wrU4(p, (uint32_t)v);
+void writeI32(uint8_t *p, int32_t value) {
+  writeU32(p, (uint32_t)value);
 }
 
-int32_t mm(float m) {
-  if (isnan(m)) return 0;
-  float v = m * 1000.0f;
-  return (int32_t)(v >= 0.0f ? v + 0.5f : v - 0.5f);
+int32_t meterToMm(float meter) {
+  return isnan(meter) ? 0 : (int32_t)(meter * 1000.0f);
 }
 
-float altitudeFromPressure(float pPa, float refPa) {
-  if (pPa <= 0.0f || refPa <= 0.0f) return NAN;
-  return 44330.77f * (1.0f - pow(pPa / refPa, 0.190263f));
+float toDegree(const char *value, const char *dir) {
+  float raw = atof(value);
+  int degree = (int)(raw / 100.0f);
+  float minute = raw - degree * 100.0f;
+  float result = degree + minute / 60.0f;
+
+  if (dir[0] == 'S' || dir[0] == 'W') {
+    result = -result;
+  }
+
+  return result;
 }
 
-int32_t rawI7(const RawDegrees &r) {
-  int32_t v = (int32_t)r.deg * 10000000L + (int32_t)((r.billionths + 50UL) / 100UL);
-  return r.negative ? -v : v;
+uint32_t toUtcMs(const char *text) {
+  if (strlen(text) < 6) return millis();
+
+  uint32_t hour = (uint32_t)(text[0] - '0') * 10 + (text[1] - '0');
+  uint32_t minute = (uint32_t)(text[2] - '0') * 10 + (text[3] - '0');
+  uint32_t second = (uint32_t)(text[4] - '0') * 10 + (text[5] - '0');
+
+  return hour * 3600000UL + minute * 60000UL + second * 1000UL;
+}
+
+byte splitNmea(char *text, char *field[], byte maxField) {
+  byte count = 1;
+  field[0] = text;
+
+  for (char *p = text; *p && count < maxField; p++) {
+    if (*p == ',') {
+      *p = '\0';
+      field[count++] = p + 1;
+    }
+  }
+
+  return count;
+}
+
+void parseGGA(char *text) {
+  char *f[15];
+  byte n = splitNmea(text, f, 15);
+
+  if (n < 10 || strstr(f[0], "GGA") == NULL) {
+    return;
+  }
+
+  int fix = atoi(f[6]);
+  gps.satellites = (uint8_t)atoi(f[7]);
+  gps.utcMs = toUtcMs(f[1]);
+
+  gps.valid =
+    fix > 0 &&
+    f[2][0] != '\0' &&
+    f[4][0] != '\0';
+
+  if (gps.valid) {
+    gps.lat = toDegree(f[2], f[3]);
+    gps.lon = toDegree(f[4], f[5]);
+    gps.mslAltM = atof(f[9]);
+  }
+
+  gps.lastGgaMs = millis();
 }
 
 void readGps() {
-  while (gpsSerial.available()) gps.encode((char)gpsSerial.read());
-}
+  while (gpsSerial.available()) {
+    char c = (char)gpsSerial.read();
 
-bool readBmp(float *pressurePa) {
-  bmp5_sensor_data s = {0, 0};
-  if (bmp.getSensorData(&s) != BMP5_OK || s.pressure <= 0.0f) return false;
-  *pressurePa = s.pressure;
-  return true;
-}
+    if (c == '\r') continue;
 
-bool initBmp() {
-  if (bmp.beginI2C(BMP581_I2C_ADDRESS_SECONDARY) == BMP5_OK) return true; // 0x46
-  return bmp.beginI2C(BMP581_I2C_ADDRESS_DEFAULT) == BMP5_OK;             // 0x47
-}
+    if (c == '\n') {
+      line[lineIndex] = '\0';
 
-void loraInitStatus(const __FlashStringHelper *state) {
-  loraSerial.print(F("TRS_INIT,"));
-  loraSerial.print(state);
-  loraSerial.print(F(",ms="));
-  loraSerial.println(millis());
-  loraSerial.flush();
-}
+      if (lineIndex > 6 &&
+          line[0] == '$' &&
+          strstr(line, "GGA") != NULL) {
+        parseGGA(line);
+      }
 
-void loraInitProgress(const __FlashStringHelper *state, uint8_t count) {
-  loraSerial.print(F("TRS_INIT,"));
-  loraSerial.print(state);
-  loraSerial.print(F(",n="));
-  loraSerial.print(count);
-  loraSerial.print(F(",ms="));
-  loraSerial.println(millis());
-  loraSerial.flush();
-}
-
-void haltWithStatus(const __FlashStringHelper *state) {
-  uint32_t last = 0;
-  while (true) {
-    readGps();
-    if (millis() - last >= 1000UL) {
-      last = millis();
-      Serial.println(state);
-      loraInitStatus(state);
+      lineIndex = 0;
+    } else if (lineIndex < sizeof(line) - 1) {
+      line[lineIndex++] = c;
+    } else {
+      lineIndex = 0;
     }
   }
-}
-
-bool zeroBmp() {
-  const uint8_t target = 50;
-  uint8_t n = 0;
-  float mean = 0.0f;
-  uint32_t last = 0;
-  uint32_t lastBeacon = 0;
-  uint32_t start = millis();
-
-  Serial.print(F("BMP zero"));
-  while (n < target && millis() - start < 10000UL) {
-    readGps();
-    if (millis() - lastBeacon >= INIT_BEACON_DT_MS) {
-      lastBeacon = millis();
-      loraInitProgress(F("BMP_ZERO"), n);
-    }
-    if (millis() - last < 100UL) continue;
-    last = millis();
-
-    float p;
-    if (readBmp(&p)) {
-      n++;
-      mean += (p - mean) / n;
-      Serial.print('.');
-    }
-  }
-  Serial.println();
-
-  if (n < 10) return false;
-  p0Pa = mean;
-  aglM = 0.0f;
-  return true;
-}
-
-uint32_t tempItowMs() {
-  if (!gps.time.isValid()) return millis();
-  return (uint32_t)gps.time.hour() * 3600000UL +
-         (uint32_t)gps.time.minute() * 60000UL +
-         (uint32_t)gps.time.second() * 1000UL +
-         (uint32_t)gps.time.centisecond() * 10UL;
 }
 
 bool gpsOk() {
-  return gps.location.isValid() &&
-         gps.location.age() < GPS_MAX_AGE_MS &&
-         (!gps.satellites.isValid() || gps.satellites.value() >= 4);
+  return gps.valid &&
+         gps.satellites >= 4 &&
+         millis() - gps.lastGgaMs < GPS_MAX_AGE_MS;
 }
 
-void buildPacket(uint8_t out[PACKET_LEN]) {
-  bool fix = gpsOk();
-  int32_t lat = fix ? rawI7(gps.location.rawLat()) : 0;
-  int32_t lon = fix ? rawI7(gps.location.rawLng()) : 0;
-  int32_t vN = 0, vE = 0, vD = 0;
+bool zeroBmp() {
+  float mean = 0.0f;
+  uint8_t count = 0;
 
-  if (fix && gps.speed.isValid() && gps.course.isValid()) {
-    float spd = gps.speed.mps();
-    float crs = gps.course.deg() * (PI / 180.0f);
-    vN = mm(spd * cos(crs));
-    vE = mm(spd * sin(crs));
+  for (uint8_t i = 0; i < 30; i++) {
+    bmp5_sensor_data sensor = {0, 0};
+
+    if (bmp.getSensorData(&sensor) == BMP5_OK &&
+        sensor.pressure > 0.0f) {
+      count++;
+      mean += (sensor.pressure - mean) / count;
+    }
+
+    delay(100);
   }
 
-  wrU2(out + 0, 0x4B52);       // bytes: 'R' 'K'
-  out[2] = seq++;
-  out[3] = fix ? 3 : 0;        // 3 = provisional 3D fix from NMEA
-  wrU4(out + 4, tempItowMs()); // temporary until UBX-NAV-PVT is used
-  wrI4(out + 8, lat);
-  wrI4(out + 12, lon);
-  wrI4(out + 16, mm(aglM));
-  wrI4(out + 20, vN);
-  wrI4(out + 24, vE);
-  wrI4(out + 28, vD);
-  wrU2(out + 32, crc16(out, 32));
+  if (count < 10) return false;
+
+  groundPressurePa = mean;
+  return true;
 }
 
-void printHex(uint8_t b) {
-  if (b < 16) Serial.print('0');
-  Serial.print(b, HEX);
-}
-
-void printPacket(const uint8_t p[PACKET_LEN]) {
-  Serial.print(F("RK packet: "));
-  for (size_t i = 0; i < PACKET_LEN; i++) {
-    printHex(p[i]);
-    Serial.print(i + 1 == PACKET_LEN ? '\n' : ' ');
+void updateBmpAltitude() {
+  if (!bmpReady) {
+    bmpAglM = 0.0f;
+    return;
   }
 
-  Serial.print(F("fix="));
-  Serial.print(p[3]);
-  Serial.print(F(", lat="));
-  Serial.print(gps.location.isValid() ? gps.location.lat() : 0.0, 7);
-  Serial.print(F(", lon="));
-  Serial.print(gps.location.isValid() ? gps.location.lng() : 0.0, 7);
-  Serial.print(F(", age_ms="));
-  Serial.print(gps.location.isValid() ? gps.location.age() : 999999UL);
-  Serial.print(F(", sats="));
-  if (gps.satellites.isValid()) Serial.print(gps.satellites.value());
-  else Serial.print(F("NA"));
-  Serial.print(F(", agl_m="));
-  Serial.print(isnan(aglM) ? 0.0 : aglM, 2);
-  Serial.print(F(", crc=0x"));
-  Serial.print((uint16_t)p[32] | ((uint16_t)p[33] << 8), HEX);
-  Serial.println();
+  bmp5_sensor_data sensor = {0, 0};
+
+  if (bmp.getSensorData(&sensor) == BMP5_OK &&
+      sensor.pressure > 0.0f) {
+    bmpAglM = 44330.77f *
+              (1.0f - pow(sensor.pressure / groundPressurePa, 0.190263f));
+  }
+}
+
+void sendPacket() {
+  uint8_t packet[PACKET_LEN];
+  bool valid = gpsOk();
+
+  int32_t latE7 = valid ? (int32_t)(gps.lat * 10000000.0f) : 0;
+  int32_t lonE7 = valid ? (int32_t)(gps.lon * 10000000.0f) : 0;
+
+  // trs_test.ino와 동일한 34-byte RK 패킷 구조
+  writeU16(packet + 0, 0x4B52);         // bytes: 'R' 'K'
+  packet[2] = sequence++;
+  packet[3] = valid ? gps.satellites : 0; // 기존 fix 자리 -> 위성 수
+  writeU32(packet + 4, gps.utcMs);
+  writeI32(packet + 8, latE7);
+  writeI32(packet + 12, lonE7);
+  writeI32(packet + 16, meterToMm(bmpAglM)); // BMP 상대 고도(AGL)
+  writeI32(packet + 20, 0);              // vN 미사용
+  writeI32(packet + 24, 0);              // vE 미사용
+  writeI32(packet + 28, 0);              // vD 미사용
+
+  writeU16(packet + 32, crc16(packet, 32));
+
+  loraSerial.write(packet, PACKET_LEN);
+  loraSerial.flush();
+
+  Serial.print(F("TX | seq="));
+  Serial.print(packet[2]);
+
+  Serial.print(F(" | sats="));
+  Serial.print(packet[3]);
+
+  Serial.print(F(" | lat="));
+  Serial.print(valid ? gps.lat : 0.0f, 6);
+
+  Serial.print(F(" | lon="));
+  Serial.print(valid ? gps.lon : 0.0f, 6);
+
+  Serial.print(F(" | gps_msl_m="));
+  Serial.print(valid ? gps.mslAltM : 0.0f, 1);
+
+  Serial.print(F(" | bmp_agl_m="));
+  Serial.println(bmpAglM, 2);
 }
 
 void setup() {
-  Serial.begin(USB_BAUD);
+  Serial.begin(115200);
   gpsSerial.begin(GPS_BAUD);
   loraSerial.begin(LORA_BAUD);
   gpsSerial.listen();
+
   Wire.begin();
-  delay(500);
+  delay(300);
 
-  Serial.println(F("TRS packet monitor + LoRa TX ii"));
-  Serial.println(F("LoRa: SoftwareSerial D10(RX), D11(TX), 9600 baud"));
-  Serial.println(F("NOTE: iTOW/velD are temporary in this NMEA version."));
-  loraInitStatus(F("BOOT"));
+  bmpReady =
+    bmp.beginI2C(BMP581_I2C_ADDRESS_SECONDARY) == BMP5_OK ||
+    bmp.beginI2C(BMP581_I2C_ADDRESS_DEFAULT) == BMP5_OK;
 
-  loraInitStatus(F("BMP_INIT"));
-  if (!initBmp()) {
-    haltWithStatus(F("BMP581_NOT_FOUND"));
+  if (bmpReady) {
+    bmpReady = zeroBmp();
   }
-  if (!zeroBmp()) {
-    haltWithStatus(F("BMP_ZERO_FAILED"));
-  }
-  loraInitStatus(F("READY"));
+
+  Serial.println(
+    bmpReady ?
+    F("GPS + BMP581 + LoRa READY") :
+    F("BMP581 NOT READY: BMP altitude is 0")
+  );
 }
 
 void loop() {
   readGps();
-  uint32_t now = millis();
 
-  if (now - tBmp >= BMP_DT_MS) {
-    tBmp = now;
-    float p;
-    if (readBmp(&p)) aglM = altitudeFromPressure(p, p0Pa);
+  if (millis() - lastBmpMs >= BMP_DT_MS) {
+    lastBmpMs = millis();
+    updateBmpAltitude();
   }
 
-  if (now - tTx >= TX_DT_MS) {
-    tTx = now;
-    uint8_t packet[PACKET_LEN];
-    buildPacket(packet);
-    if (LORA_ASCII_TEST) {
-      loraSerial.print(F("PING seq="));
-      loraSerial.print(packet[2]);
-      loraSerial.print(F(" fix="));
-      loraSerial.println(packet[3]);
-    }
-    loraSerial.write(packet, PACKET_LEN);
-    loraSerial.flush();
-
-    if (now - tDbg >= DBG_DT_MS) {
-      tDbg = now;
-      printPacket(packet);
-    }
+  if (millis() - lastTxMs >= TX_DT_MS) {
+    lastTxMs = millis();
+    sendPacket();
   }
 }

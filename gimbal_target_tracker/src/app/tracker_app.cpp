@@ -141,7 +141,7 @@ void TrackerApp::printStatus(uint32_t nowMs) {
   const GimbalState& gimbal = gimbal_.state();
   const bool remoteFresh =
       isFresh(nowMs, remote.timestampMs, cfg::REMOTE_TIMEOUT_MS);
-  const bool txGpsOk = remoteFresh && (remote.fixType == 3 || remote.fixType == 4) &&
+  const bool txGpsOk = remoteFresh && remote.satelliteCount >= 4 &&
                        remote.latI7 != 0 && remote.lonI7 != 0;
   // trs_test's 34-byte packet has no barometer-valid bit. A recent packet
   // with a finite AGL field is the available transmitter-barometer indication.
@@ -156,11 +156,11 @@ void TrackerApp::printStatus(uint32_t nowMs) {
   const bool servoOk = gimbal.healthy && gimbal.torqueOn &&
                        gimbal.yawOnline && gimbal.pitchOnline;
 
-  // trs_test's 34-byte RK packet carries fixType but not satellite count.
+  // trs_test's 34-byte RK packet carries satellite count at byte 3.
   debug_.print(F("TX[gps=")); debug_.print(txGpsOk ? F("OK") : F("NO"));
   debug_.print(F(" lat=")); debug_.print(static_cast<double>(remote.latI7) * 1.0e-7, 7);
   debug_.print(F(" lon=")); debug_.print(static_cast<double>(remote.lonI7) * 1.0e-7, 7);
-  debug_.print(F(" fix=")); debug_.print(remote.fixType);
+  debug_.print(F(" sv=")); debug_.print(remote.satelliteCount);
   debug_.print(F(" agl_m=")); debug_.print(remote.aglM, 2);
   debug_.print(F(" baro=")); debug_.print(txBaroOk ? F("OK") : F("NO"));
 
