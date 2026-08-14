@@ -9,7 +9,12 @@ constexpr uint32_t CONTROL_PERIOD_US = 20000;   // 50 Hz
 constexpr uint32_t BARO_PERIOD_US = 20000;      // 50 Hz
 constexpr uint32_t GPS_POLL_PERIOD_US = 10000;  // 100 Hz bus polling, NAV-PVT is 10 Hz
 constexpr uint32_t LOG_PERIOD_US = 100000;      // 10 Hz
-constexpr uint32_t STATUS_PERIOD_MS = 1000;
+// Match trs_test.ino TX_DT_MS: print one compact health line at the 10 Hz
+// transmitter packet rate.
+constexpr uint32_t STATUS_PERIOD_MS = 100;
+// Keep the gimbal at its user-set pose while gathering the initial GPS/IMU
+// alignment. The pose aimed at the transmitter becomes yaw/pitch 0/0.
+constexpr uint32_t INITIAL_ALIGNMENT_MS = 10000;
 
 // Freshness limits
 constexpr uint32_t IMU_TIMEOUT_MS = 200;

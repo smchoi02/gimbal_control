@@ -1,5 +1,7 @@
 #include "tracker_app.h"
 
+#include <math.h>
+
 #include "../common/time_utils.h"
 #include "../config/system_config.h"
 #include "../math/target_geometry.h"
@@ -13,54 +15,16 @@ TrackerApp::TrackerApp(Stream& debug, Stream& lora)
       gimbal_(Serial1, cfg::DXL_DIR_PIN) {}
 
 void TrackerApp::begin() {
-  debug_.println(F("# gimbal_target_tracker boot"));
-
-  const bool imuOk =
-      imu_.begin(cfg::BNO085_ADDRESS, 20, cfg::BNO_USE_GAME_ROTATION_VECTOR);
-  debug_.print(F("# BNO085: "));
-  if (imuOk) {
-    debug_.println(imu_.usingGameRotationVector()
-                       ? F("OK; Game Rotation Vector")
-                       : F("OK; magnetic Rotation Vector"));
-  } else {
-    debug_.println(F("FAIL"));
-  }
-
-  const bool baroOk = barometer_.begin(cfg::BMP581_ADDRESS);
-  debug_.print(F("# BMP581: "));
-  debug_.print(baroOk ? F("OK id=0x") : F("FAIL id=0x"));
-  debug_.println(barometer_.chipId(), HEX);
-
-  const bool gpsOk = gps_.begin(cfg::MAX_M10S_ADDRESS);
-  debug_.print(F("# MAX-M10S: "));
-  debug_.println(gpsOk ? F("OK; NAV-PVT 10Hz requested") : F("FAIL"));
+  imu_.begin(cfg::BNO085_ADDRESS, 20, cfg::BNO_USE_GAME_ROTATION_VECTOR);
+  barometer_.begin(cfg::BMP581_ADDRESS);
+  gps_.begin(cfg::MAX_M10S_ADDRESS);
 
   e22_.begin(cfg::E22_M0_PIN, cfg::E22_M1_PIN, cfg::E22_AUX_PIN);
-  debug_.print(F("# E22-900T22S: normal/transparent receiver "));
-  debug_.println(e22_.moduleReady() ? F("ready") : F("starting/busy"));
-
   const bool gimbalOk = gimbal_.begin();
-  debug_.print(F("# DYNAMIXEL: "));
-  if (gimbalOk) {
-    debug_.print(F("OK yaw="));
-    debug_.print(gimbal_.state().yawOnline ? 1 : 0);
-    debug_.print(F(" pitch="));
-    debug_.println(gimbal_.state().pitchOnline ? 1 : 0);
-  } else {
-    debug_.println(F("FAIL (no configured motor answered ping)"));
-  }
-
-  const bool sdOk = logger_.begin(cfg::SD_CS_PIN);
-  debug_.print(F("# SD: "));
-  if (sdOk) {
-    debug_.print(F("OK file="));
-    debug_.println(logger_.filename());
-  } else {
-    debug_.println(F("FAIL (tracking continues without logging)"));
-  }
+  logger_.begin(cfg::SD_CS_PIN);
 
   if (!gimbalOk) mode_ = TrackMode::FAULT;
-  debug_.println(F("# commands: ? | C | Z | T0/T1 | K | P"));
+  resetInitialAlignment(millis());
 
   const uint32_t nowUs = micros();
   lastControlUs_ = lastBaroUs_ = lastGpsPollUs_ = lastLogUs_ = nowUs;
@@ -113,14 +77,17 @@ void TrackerApp::controlTick(uint32_t nowMs, float dtSeconds) {
     return;
   }
 
+  // Do not send stow/track commands while the user holds the gimbal pointed
+  // at the transmitter. This establishes the initial line-of-sight reference.
+  if (!trackingReferenceReady_) {
+    collectInitialAlignmentSample(nowMs);
+    if (finishInitialAlignment(nowMs)) return;
+    mode_ = TrackMode::STOW;
+    relative_.valid = false;
+    return;
+  }
+
   if (trackingInputsFresh(nowMs)) {
-    if (!trackingReferenceReady_) {
-      captureImuReference();
-      mode_ = TrackMode::STOW;
-      relative_.valid = false;
-      gimbal_.stow(dtSeconds);
-      return;
-    }
     float targetNed[3];
     RelativeTarget calculated;
     float relativeAttitudeQ[4];
@@ -130,6 +97,9 @@ void TrackerApp::controlTick(uint32_t nowMs, float dtSeconds) {
                                      targetNed) &&
         target_geometry::pointingAngles(targetNed, relativeAttitudeQ,
                                         &calculated)) {
+      // The user-aligned transmitter direction is the gimbal origin.
+      calculated.yawDeg -= initialTargetYawDeg_;
+      calculated.pitchDeg -= initialTargetPitchDeg_;
       relative_ = calculated;
       target_geometry::normalizeDirection(targetNed, lastDirectionNed_);
       haveLastDirection_ = true;
@@ -165,55 +135,52 @@ void TrackerApp::logTick(uint32_t nowMs) {
 }
 
 void TrackerApp::printStatus(uint32_t nowMs) {
-  const remote_protocol::Parser& selectedParser = e22_.parser();
-  debug_.print(F("# mode="));
-  debug_.print(static_cast<uint8_t>(mode_));
-  debug_.print(F(" imu="));
-  debug_.print(attitudeFresh(nowMs));
-  debug_.print(F(" imu_hw/report/src="));
-  debug_.print(imu_.present());
-  debug_.print('/');
-  debug_.print(imu_.reportEnabled());
-  debug_.print('/');
-  debug_.print(imu_.sourceCode());
-  debug_.print(F(" imu_rst/rec="));
-  debug_.print(imu_.resetCount());
-  debug_.print('/');
-  debug_.print(imu_.reportRecoveryCount());
-  debug_.print(F(" baro="));
-  debug_.print(localBarometerInput().valid &&
-               isFresh(nowMs, localBarometerInput().timestampMs,
-                       cfg::LOCAL_BARO_TIMEOUT_MS));
-  debug_.print(F(" gps="));
-  debug_.print(localGpsInput().valid &&
-               isFresh(nowMs, localGpsInput().timestampMs,
-                       cfg::LOCAL_GPS_TIMEOUT_MS));
-  debug_.print(F(" remote="));
-  debug_.print(remoteInput().valid &&
-               isFresh(nowMs, remoteInput().timestampMs,
-                       cfg::REMOTE_TIMEOUT_MS));
-  debug_.print(F(" e22_ready="));
-  debug_.print(e22_.moduleReady());
-  debug_.print(F(" imu_ref/remote_imu_ref="));
-  debug_.print(trackingReferenceReady_);
-  debug_.print('/');
-  debug_.print(remoteImuReferenceReady_);
-  debug_.print(F(" range_m="));
-  debug_.print(relative_.rangeM, 1);
-  debug_.print(F(" cmd="));
-  debug_.print(gimbal_.state().yawCommandDeg, 1);
-  debug_.print(',');
-  debug_.print(gimbal_.state().pitchCommandDeg, 1);
-  debug_.print(F(" rx_ok/bad/lost="));
-  debug_.print(selectedParser.packetsOk);
-  debug_.print('/');
-  debug_.print(selectedParser.packetsBad);
-  debug_.print('/');
-  debug_.print(selectedParser.sequenceLost);
-  debug_.print(F(" sd_rows/errors="));
-  debug_.print(logger_.rowsWritten());
-  debug_.print('/');
-  debug_.println(logger_.writeErrors());
+  const RemoteTargetSample& remote = remoteInput();
+  const GpsFix& localGps = localGpsInput();
+  const AttitudeSample& localImu = imu_.sample();
+  const GimbalState& gimbal = gimbal_.state();
+  const bool remoteFresh =
+      isFresh(nowMs, remote.timestampMs, cfg::REMOTE_TIMEOUT_MS);
+  const bool txGpsOk = remoteFresh && (remote.fixType == 3 || remote.fixType == 4) &&
+                       remote.latI7 != 0 && remote.lonI7 != 0;
+  // trs_test's 34-byte packet has no barometer-valid bit. A recent packet
+  // with a finite AGL field is the available transmitter-barometer indication.
+  const bool txBaroOk = remoteFresh && isfinite(remote.aglM);
+  const bool rxGpsOk = localGps.valid &&
+                       isFresh(nowMs, localGps.timestampMs,
+                               cfg::LOCAL_GPS_TIMEOUT_MS);
+  const bool rxImuOk = attitudeFresh(nowMs);
+  const bool rxBaroOk = localBarometerInput().valid &&
+                        isFresh(nowMs, localBarometerInput().timestampMs,
+                                cfg::LOCAL_BARO_TIMEOUT_MS);
+  const bool servoOk = gimbal.healthy && gimbal.torqueOn &&
+                       gimbal.yawOnline && gimbal.pitchOnline;
+
+  // trs_test's 34-byte RK packet carries fixType but not satellite count.
+  debug_.print(F("TX[gps=")); debug_.print(txGpsOk ? F("OK") : F("NO"));
+  debug_.print(F(" lat=")); debug_.print(static_cast<double>(remote.latI7) * 1.0e-7, 7);
+  debug_.print(F(" lon=")); debug_.print(static_cast<double>(remote.lonI7) * 1.0e-7, 7);
+  debug_.print(F(" fix=")); debug_.print(remote.fixType);
+  debug_.print(F(" agl_m=")); debug_.print(remote.aglM, 2);
+  debug_.print(F(" baro=")); debug_.print(txBaroOk ? F("OK") : F("NO"));
+
+  debug_.print(F("] RX[gps=")); debug_.print(rxGpsOk ? F("OK") : F("NO"));
+  debug_.print(F(" lat=")); debug_.print(static_cast<double>(localGps.latI7) * 1.0e-7, 7);
+  debug_.print(F(" lon=")); debug_.print(static_cast<double>(localGps.lonI7) * 1.0e-7, 7);
+  debug_.print(F(" sv=")); debug_.print(localGps.numSv);
+  debug_.print(F(" hmsl_m=")); debug_.print(static_cast<float>(localGps.hMslMm) * 0.001f, 2);
+  debug_.print(F(" imu=")); debug_.print(rxImuOk ? F("OK") : F("NO"));
+  debug_.print(F(" omega_xyz_dps="));
+  debug_.print(localImu.angularRateDps[0], 1); debug_.print('/');
+  debug_.print(localImu.angularRateDps[1], 1); debug_.print('/');
+  debug_.print(localImu.angularRateDps[2], 1);
+  debug_.print(F(" baro=")); debug_.print(rxBaroOk ? F("OK") : F("NO"));
+
+  debug_.print(F("] SERVO=")); debug_.print(servoOk ? F("OK") : F("NO"));
+  debug_.print(F("(yaw=")); debug_.print(gimbal.yawOnline ? 1 : 0);
+  debug_.print(F(" pitch=")); debug_.print(gimbal.pitchOnline ? 1 : 0);
+  debug_.print(F(" torque=")); debug_.print(gimbal.torqueOn ? 1 : 0);
+  debug_.println(F(")"));
 }
 
 void TrackerApp::pollCommands() {
@@ -235,37 +202,25 @@ void TrackerApp::handleCommand(char* line) {
   switch (line[0]) {
     case 'C':
       trackingEnabled_ = true;
-      debug_.println(F("# tracking enabled"));
       break;
     case 'Z':
       trackingEnabled_ = false;
-      debug_.println(F("# tracking disabled; STOW"));
       break;
     case 'T':
       gimbal_.setTorque(line[1] == '1');
-      debug_.println(line[1] == '1' ? F("# torque ON") : F("# torque OFF"));
       break;
     case 'K':
-      if (gimbal_.calibrateZero()) {
-        debug_.println(F("# gimbal zero calibrated at current pose"));
-      } else {
-        debug_.println(F("# gimbal zero calibration failed: no motor online"));
-      }
+      gimbal_.calibrateZero();
       break;
     case 'R':
-      trackingReferenceReady_ = false;
-      remoteImuReferenceReady_ = false;
+      resetInitialAlignment(millis());
       haveLastDirection_ = false;
       relative_.valid = false;
-      debug_.println(F("# IMU reference reset; waiting for real RK packet"));
       break;
     case 'P':
       gps_.configure10Hz();
-      debug_.println(F("# MAX-M10S configuration sent"));
       break;
     case '?':
-      debug_.println(
-          F("# C=track, Z=stow, T0/T1=torque, K=zero now, R=reference reset, P=GPS cfg"));
       break;
   }
 }
@@ -283,24 +238,57 @@ bool TrackerApp::attitudeFresh(uint32_t nowMs) const {
          isFresh(nowMs, imu_.sample().timestampMs, cfg::IMU_TIMEOUT_MS);
 }
 
-bool TrackerApp::captureImuReference() {
-  if (!localGpsInput().valid || !remoteInput().valid || !imu_.sample().valid) {
+void TrackerApp::resetInitialAlignment(uint32_t nowMs) {
+  initialAlignmentStartMs_ = nowMs;
+  initialAlignmentSamples_ = 0;
+  trackingReferenceReady_ = false;
+  initialImuSum_[0] = initialImuSum_[1] = initialImuSum_[2] = initialImuSum_[3] = 0.0f;
+  initialTargetDirectionSum_[0] = initialTargetDirectionSum_[1] =
+      initialTargetDirectionSum_[2] = 0.0f;
+}
+
+void TrackerApp::collectInitialAlignmentSample(uint32_t nowMs) {
+  if (!trackingInputsFresh(nowMs)) return;
+
+  float targetNed[3];
+  if (!target_geometry::relativeNed(localGpsInput(), remoteInput(), targetNed)) {
+    return;
+  }
+  target_geometry::normalizeDirection(targetNed, targetNed);
+  const AttitudeSample& imu = imu_.sample();
+  float sign = 1.0f;
+  if (initialAlignmentSamples_ > 0 &&
+      initialImuSum_[0] * imu.q[0] + initialImuSum_[1] * imu.q[1] +
+          initialImuSum_[2] * imu.q[2] + initialImuSum_[3] * imu.q[3] < 0.0f) {
+    sign = -1.0f;
+  }
+  for (uint8_t i = 0; i < 4; ++i) initialImuSum_[i] += sign * imu.q[i];
+  for (uint8_t i = 0; i < 3; ++i) initialTargetDirectionSum_[i] += targetNed[i];
+  ++initialAlignmentSamples_;
+}
+
+bool TrackerApp::finishInitialAlignment(uint32_t nowMs) {
+  if (static_cast<uint32_t>(nowMs - initialAlignmentStartMs_) <
+      cfg::INITIAL_ALIGNMENT_MS || initialAlignmentSamples_ == 0) {
     return false;
   }
   for (uint8_t i = 0; i < 4; ++i) {
-    localImuReferenceQ_[i] = imu_.sample().q[i];
+    localImuReferenceQ_[i] = initialImuSum_[i];
   }
   attitude::normalizeQuaternion(localImuReferenceQ_);
-  remoteImuReferenceReady_ = (remoteInput().imuFlags & 0x04u) != 0;
-  if (remoteImuReferenceReady_) {
-    for (uint8_t i = 0; i < 4; ++i) {
-      remoteImuReferenceQ_[i] = remoteInput().quaternion[i];
-    }
-    attitude::normalizeQuaternion(remoteImuReferenceQ_);
+  target_geometry::normalizeDirection(initialTargetDirectionSum_,
+                                      initialTargetDirectionSum_);
+  const float identityQ[4] = {1.0f, 0.0f, 0.0f, 0.0f};
+  RelativeTarget initialTarget;
+  if (!target_geometry::pointingAngles(initialTargetDirectionSum_, identityQ,
+                                       &initialTarget)) {
+    return false;
   }
+  initialTargetYawDeg_ = initialTarget.yawDeg;
+  initialTargetPitchDeg_ = initialTarget.pitchDeg;
+  gimbal_.calibrateZero();
   trackingReferenceReady_ = true;
   haveLastDirection_ = false;
-  debug_.println(F("# local IMU reference captured; target starts at yaw/pitch 0/0"));
   return true;
 }
 

@@ -14,6 +14,8 @@ struct AttitudeSample {
   float yawDeg = 0.0f;
   float pitchDeg = 0.0f;
   float rollDeg = 0.0f;
+  // Body-axis angular velocity derived from successive BNO085 quaternions.
+  float angularRateDps[3] = {};
   uint8_t accuracy = 0;
   uint32_t timestampMs = 0;
   bool valid = false;

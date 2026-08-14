@@ -32,11 +32,16 @@ class TrackerApp {
   float lastDirectionNed_[3] = {1.0f, 0.0f, 0.0f};
   bool haveLastDirection_ = false;
   bool trackingEnabled_ = true;
-  // Captured while the gimbal is aimed at its 0°/0° reference pose.
+  // Averaged while the user holds the gimbal aimed at the transmitter during
+  // the initial alignment window.
   float localImuReferenceQ_[4] = {1.0f, 0.0f, 0.0f, 0.0f};
-  float remoteImuReferenceQ_[4] = {1.0f, 0.0f, 0.0f, 0.0f};
+  float initialImuSum_[4] = {};
+  float initialTargetDirectionSum_[3] = {};
+  float initialTargetYawDeg_ = 0.0f;
+  float initialTargetPitchDeg_ = 0.0f;
+  uint32_t initialAlignmentStartMs_ = 0;
+  uint16_t initialAlignmentSamples_ = 0;
   bool trackingReferenceReady_ = false;
-  bool remoteImuReferenceReady_ = false;
 
   uint32_t lastControlUs_ = 0;
   uint32_t lastBaroUs_ = 0;
@@ -54,7 +59,9 @@ class TrackerApp {
   void handleCommand(char* line);
   bool trackingInputsFresh(uint32_t nowMs) const;
   bool attitudeFresh(uint32_t nowMs) const;
-  bool captureImuReference();
+  void resetInitialAlignment(uint32_t nowMs);
+  void collectInitialAlignmentSample(uint32_t nowMs);
+  bool finishInitialAlignment(uint32_t nowMs);
   const GpsFix& localGpsInput() const;
   const BarometerSample& localBarometerInput() const;
   const RemoteTargetSample& remoteInput() const;
