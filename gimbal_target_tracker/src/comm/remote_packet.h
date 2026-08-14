@@ -8,18 +8,16 @@
 #include "../common/crc16.h"
 #include "../common/types.h"
 
-// TRS RK wire format, little-endian, 58 bytes total.
+// TRS RK wire format, little-endian, 34 bytes total.
 //  0 "RK", 2 seq, 3 fix, 4 iTOW, 8 lat_i7, 12 lon_i7,
-// 16 AGL mm, 20/24/28 N/E/D mm/s, 32 imuFlags, 33 quatAcc,
-// 34 imuAgeMs, 36 accel XYZ (int16, m/s^2 * 100),
-// 42 gyro XYZ (int16, deg/s * 10), 48 quaternion WXYZ (int16, Q14),
-// 56 CRC-16/CCITT-FALSE over bytes 0..55.
+// 16 AGL mm, 20/24/28 N/E/D mm/s,
+// 32 CRC-16/CCITT-FALSE over bytes 0..31.
 namespace remote_protocol {
 
 constexpr uint8_t MAGIC_0 = 'R';
 constexpr uint8_t MAGIC_1 = 'K';
-constexpr size_t PACKET_SIZE = 58;
-constexpr size_t CRC_OFFSET = 56;
+constexpr size_t PACKET_SIZE = 34;
+constexpr size_t CRC_OFFSET = 32;
 
 struct Payload {
   uint8_t sequence = 0;
@@ -31,12 +29,6 @@ struct Payload {
   int32_t velNMmS = 0;
   int32_t velEMmS = 0;
   int32_t velDMmS = 0;
-  uint8_t imuFlags = 0;
-  uint8_t quatAccuracy = 0;
-  uint16_t imuAgeMs = 0;
-  int16_t accelMps2X100[3] = {};
-  int16_t gyroDpsX10[3] = {};
-  int16_t quaternionQ14[4] = {16384, 0, 0, 0};
 };
 
 inline void writeU16(uint8_t* out, uint16_t value) {
@@ -74,14 +66,6 @@ inline size_t encode(const Payload& payload, uint8_t* out, size_t capacity) {
   writeU32(out + 20, static_cast<uint32_t>(payload.velNMmS));
   writeU32(out + 24, static_cast<uint32_t>(payload.velEMmS));
   writeU32(out + 28, static_cast<uint32_t>(payload.velDMmS));
-  out[32] = payload.imuFlags; out[33] = payload.quatAccuracy;
-  writeU16(out + 34, payload.imuAgeMs);
-  for (uint8_t i = 0; i < 3; ++i) writeU16(out + 36 + 2 * i,
-      static_cast<uint16_t>(payload.accelMps2X100[i]));
-  for (uint8_t i = 0; i < 3; ++i) writeU16(out + 42 + 2 * i,
-      static_cast<uint16_t>(payload.gyroDpsX10[i]));
-  for (uint8_t i = 0; i < 4; ++i) writeU16(out + 48 + 2 * i,
-      static_cast<uint16_t>(payload.quaternionQ14[i]));
   writeU16(out + CRC_OFFSET, crc16CcittFalse(out, CRC_OFFSET));
   return PACKET_SIZE;
 }
@@ -97,11 +81,6 @@ inline bool decode(const uint8_t* in, size_t length, Payload* payload) {
   payload->velNMmS = static_cast<int32_t>(readU32(in + 20));
   payload->velEMmS = static_cast<int32_t>(readU32(in + 24));
   payload->velDMmS = static_cast<int32_t>(readU32(in + 28));
-  payload->imuFlags = in[32]; payload->quatAccuracy = in[33];
-  payload->imuAgeMs = readU16(in + 34);
-  for (uint8_t i = 0; i < 3; ++i) payload->accelMps2X100[i] = readI16(in + 36 + 2 * i);
-  for (uint8_t i = 0; i < 3; ++i) payload->gyroDpsX10[i] = readI16(in + 42 + 2 * i);
-  for (uint8_t i = 0; i < 4; ++i) payload->quaternionQ14[i] = readI16(in + 48 + 2 * i);
   return true;
 }
 
@@ -153,15 +132,6 @@ inline RemoteTargetSample toSample(const Payload& payload, uint32_t nowMs) {
   out.velNMps = static_cast<float>(payload.velNMmS) * 0.001f;
   out.velEMps = static_cast<float>(payload.velEMmS) * 0.001f;
   out.velDMps = static_cast<float>(payload.velDMmS) * 0.001f;
-  out.imuFlags = payload.imuFlags; out.quatAccuracy = payload.quatAccuracy;
-  out.imuAgeMs = payload.imuAgeMs;
-  for (uint8_t i = 0; i < 3; ++i) {
-    out.accelMps2[i] = static_cast<float>(payload.accelMps2X100[i]) * 0.01f;
-    out.gyroDps[i] = static_cast<float>(payload.gyroDpsX10[i]) * 0.1f;
-  }
-  for (uint8_t i = 0; i < 4; ++i) {
-    out.quaternion[i] = static_cast<float>(payload.quaternionQ14[i]) / 16384.0f;
-  }
   out.fixType = payload.fixType; out.timestampMs = nowMs;
   out.valid = (payload.fixType == 3 || payload.fixType == 4) &&
               isfinite(out.aglM) && fabsf(out.aglM) <= 30000.0f;
