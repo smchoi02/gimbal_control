@@ -40,7 +40,7 @@ E22-900T22S는 M0/M1을 부동 상태로 두면 안 된다. 정상 투명 전송
 
 ## 원격 패킷
 
-수신기는 송신기의 58-byte little-endian `RK` + IMU 패킷을 해석한다. 실제 수신 검증에는 `examples/e22_link_rx_test/e22_link_rx_test.ino`를 사용한다.
+수신기는 송신기의 34-byte little-endian `RK` 위치 패킷을 해석한다. 실제 수신 검증에는 `examples/e22_link_rx_test/e22_link_rx_test.ino`를 사용한다.
 
 | Offset | Size | 내용 |
 |---:|---:|---|
@@ -54,13 +54,7 @@ E22-900T22S는 M0/M1을 부동 상태로 두면 안 된다. 정상 투명 전송
 | 20 | 4 | north velocity, signed mm/s |
 | 24 | 4 | east velocity, signed mm/s |
 | 28 | 4 | down velocity, signed mm/s |
-| 32 | 1 | IMU flags: accel/gyro/quaternion validity |
-| 33 | 1 | quaternion accuracy |
-| 34 | 2 | IMU sample age, ms |
-| 36 | 6 | accel XYZ, signed m/s² × 100 |
-| 42 | 6 | gyro XYZ, signed deg/s × 10 |
-| 48 | 8 | quaternion WXYZ, signed Q14 |
-| 56 | 2 | CRC-16/CCITT-FALSE, bytes 0..55 |
+| 32 | 2 | CRC-16/CCITT-FALSE, bytes 0..31 |
 
 ## BNO085 주의사항
 
