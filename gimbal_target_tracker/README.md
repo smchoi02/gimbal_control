@@ -1,80 +1,77 @@
-# gimbal_target_tracker
+# Payload gimbal tracker
 
-OpenRB-150 기반 표적 추적 짐벌 펌웨어다.
+Open `gimbal_target_tracker.ino` directly in Arduino IDE and select
+`OpenRB-150`. This is the only tracker document.
 
-- 자세: BNO085 (`Wire` I2C)
-- 로컬 위치/고도: MAX-M10S, BMP581 (`Wire` I2C)
-- 원격 표적 링크: EBYTE E22-900T22S (`Serial3` UART)
-- 구동: DYNAMIXEL yaw/pitch (`Serial1`)
-- 기록: SD 카드 (SPI)
+## What it does
 
-Arduino IDE에서 `gimbal_target_tracker.ino`를 열어 OpenRB-150 대상으로 빌드한다.
-ICM-20948 관련 선택 분기와 드라이버는 제거되었으며, 이 프로젝트의 IMU는 BNO085만 사용한다.
+The rocket's unchanged `final_test` sends this 34-byte little-endian E22 frame:
 
-배선은 [WIRING.md](WIRING.md)를 참고한다. 이 펌웨어는 실제 E22 수신 패킷만 사용한다.
+```text
+RK | sequence | fixType | iTOW | latitude_i7 | longitude_i7 |
+rocket_AGL_mm | velocity_N_mmps | velocity_E_mmps | velocity_D_mmps | CRC16
+```
 
-## 동작
+`fixType` is byte 3. Valid remote GPS is only fix type 3 or 4. Packet freshness
+uses the local receive time and sequence number, never rocket iTOW.
 
-1. E22-900T22S가 투명 UART 모드로 원격 GPS·AGL·속도 패킷을 수신한다.
-2. 로컬 MAX-M10S/BMP581과 원격 데이터를 NED 목표 벡터로 계산한다.
-3. BNO085 Rotation Vector로 NED 벡터를 짐벌 body 좌표계로 회전한다.
-4. yaw/pitch 명령을 기구 한계와 속도 제한에 맞춰 DYNAMIXEL에 전송한다.
+The payload reads its own MAX-M10S, BMP581, and BNO085. It calculates NED
+(north/east/down) relative position. Vertical position is:
 
-원격·GPS·기압 입력이 끊기면 마지막 NED 방향을 BNO085 자세로 유지한다. 유효 방향이나 BNO085 자세도 없으면 STOW `(0, 0)`로 전환한다.
+```text
+relativeUp = rocketAGL - payloadAGL - initialBaroBias
+```
 
-## 하드웨어 설정
+## Automatic behavior
 
-`src/config/system_config.h`에서 실제 배선과 일치하는지 확인한다.
+There are no serial control commands and no test modes.
 
-| 항목 | 기본값 | 설명 |
-|---|---:|---|
-| `BNO085_ADDRESS` | `0x4A` | ADR 상태에 따라 `0x4B` 가능 |
-| `BNO_USE_GAME_ROTATION_VECTOR` | `true` | 전원 인가 방향 기준 yaw. 북 기준 추적을 검증한 뒤에만 `false` 고려 |
-| `BMP581_ADDRESS` | `0x47` | 실제 보드 주소 확인 |
-| `MAX_M10S_ADDRESS` | `0x42` | u-blox 기본 I2C 주소 |
-| `E22_UART_BAUD` | `9600` | 송신·수신 E22 UART 설정과 반드시 일치 |
-| `E22_M0_PIN`, `E22_M1_PIN` | `-1` | `-1`이면 두 모드 핀을 물리적으로 GND에 연결 |
-| `E22_AUX_PIN` | `-1` | 선택. 연결하면 모듈 준비 상태를 상태 출력에 반영 |
+```text
+BOOT → WAIT → ALIGN → TRACK
+                     └→ HOLD on bad/stale data
+```
 
-E22-900T22S는 M0/M1을 부동 상태로 두면 안 된다. 정상 투명 전송은 `M0=LOW`, `M1=LOW`이며, 두 핀을 GND에 고정하거나 각각 MCU GPIO로 구동한다. 송신기와 수신기의 UART baud, 900 MHz 대역 채널, NETID, air data rate, 암호화 설정은 모두 같아야 한다. 이 펌웨어는 E22 레지스터를 자동 설정하지 않는다.
+- At startup it averages the payload pressure reference and automatically
+  captures the rocket/payload barometer bias while both are near each other.
+- As soon as the IMU is valid, it captures the current payload pose and gimbal
+  encoder pose, then stabilizes subsequent payload tilt even if GPS/LoRa are
+  not valid yet.
+- When remote GPS, local GPS, local barometer, IMU, and LoRa are all valid, it
+  automatically aligns for 10 seconds and starts tracking. The gimbal must be
+  physically aimed at the intended reference direction during this interval.
+- GPS azimuth is rejected below the configured horizontal distance threshold.
+- In `TRACK`, the gimbal tracks the newest rocket direction.
+- In `HOLD`, it retains the last valid world direction and uses live IMU data
+  to counter payload tilt. It never commands an abrupt 0/0 stow move.
+- In `FAULT`, Dynamixel health failed or temperature protection stopped it.
 
-## 원격 패킷
+At one second intervals USB Serial prints state/blocker, LoRa counters and age,
+GPS fixes, N/E/up, barometer values, IMU Euler angles, and gimbal target/
+command/encoder positions. Typical blockers are `REMOTE_STALE`, `REMOTE_GPS`,
+`LOCAL_GPS`, `LOCAL_BARO`, `IMU`, and `RANGE`.
 
-수신기는 송신기의 34-byte little-endian `RK` 위치 패킷을 해석한다. 실제 수신 검증에는 `examples/e22_link_rx_test/e22_link_rx_test.ino`를 사용한다.
+## Settings to verify on hardware
 
-| Offset | Size | 내용 |
-|---:|---:|---|
-| 0 | 2 | ASCII `RK` |
-| 2 | 1 | sequence |
-| 3 | 1 | transmitter GPS satellite count |
-| 4 | 4 | temporary iTOW ms |
-| 8 | 4 | latitude, signed `1e-7 deg` |
-| 12 | 4 | longitude, signed `1e-7 deg` |
-| 16 | 4 | AGL, signed mm |
-| 20 | 4 | north velocity, signed mm/s |
-| 24 | 4 | east velocity, signed mm/s |
-| 28 | 4 | down velocity, signed mm/s |
-| 32 | 2 | CRC-16/CCITT-FALSE, bytes 0..31 |
+All wiring, ports, IDs, and tunable values are in `src/config/system_config.h`.
+Do not change them blindly. Bench-test the following in this order:
 
-## BNO085 주의사항
+1. Keep the mechanism restrained and check `torque=1` plus changing IMU Y/P/R.
+2. Verify `cmd` changes when the payload is tilted in `TRACK` or `HOLD`.
+3. If command changes but encoder `pos` does not, check Dynamixel power/bus/
+   torque rather than tracking math.
+4. If motion sign is wrong, adjust only the documented motor sign or
+   IMU-to-gimbal axis permutation/sign after a static-axis test.
+5. Confirm GPS antenna view, BMP581 static venting, rigid IMU mounting on the
+   non-moving payload base, gimbal backlash, mechanical limits, and cable
+   clearance before free movement.
 
-현재 좌표 변환은 BNO085 축과 짐벌 body 축이 정렬됐다고 가정한다. 센서 장착 방향이 다르면 mount quaternion 보정을 추가해야 한다. `Game Rotation Vector`는 자력을 쓰지 않아 전원 인가 시점의 yaw가 0°가 된다. 지리적 북 기준 추적이 필요한 경우, 모터·배선 자기장 영향을 포함해 `Rotation Vector`의 현장 검증과 yaw 보정을 먼저 수행해야 한다.
+The gimbal trajectory is filtered and acceleration-limited at 50 Hz. The main
+tuning values are `GIMBAL_TARGET_FILTER_TIME_CONSTANT_S`, `MAX_RATE_DEG_S`,
+and `MAX_ACCEL_DEG_S2`.
 
-필요한 외부 라이브러리는 ROBOTIS `Dynamixel2Arduino` 및 SparkFun `BNO08x Arduino Library`다.
+Host parser/geometry test:
 
-## 시리얼 명령
-
-- `C`: 추적 활성화
-- `Z`: 추적 비활성화 및 STOW
-- `T0` / `T1`: DYNAMIXEL 토크 OFF / ON
-- `P`: MAX-M10S 10 Hz 설정 재전송
-- `?`: 명령 도움말
-
-1초 상태 출력의 `imu_hw/report/src=1/1/G`는 BNO085 Game Rotation Vector가 정상이라는 뜻이다. `e22_ready=0`은 AUX를 연결한 경우 모듈이 기동 중이거나 busy 상태임을 뜻한다.
-
-## PC 코어 테스트
-
-```bash
-g++ -std=c++17 -I./src tests/test_core.cpp -o tests/test_core
-./tests/test_core
+```powershell
+g++ -std=c++17 -I./src tests/test_core.cpp -o tests/test_core.exe
+.\tests\test_core.exe
 ```

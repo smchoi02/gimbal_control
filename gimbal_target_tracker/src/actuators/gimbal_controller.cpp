@@ -1,5 +1,7 @@
 #include "gimbal_controller.h"
 
+#include <math.h>
+
 #include "../config/system_config.h"
 
 using namespace ControlTableItem;
@@ -34,7 +36,7 @@ bool GimbalController::begin() {
     dxl_.writeControlTableItem(PROFILE_VELOCITY, id,
                                cfg::DXL_PROFILE_VELOCITY);
   }
-  if (cfg::AUTO_CALIBRATE_GIMBAL_ZERO_ON_BOOT) calibrateZero();
+  if (cfg::AUTO_CAPTURE_GIMBAL_ZERO_ON_BOOT) captureSoftZero();
   setTorque(true);
   return true;
 }
@@ -42,7 +44,11 @@ bool GimbalController::begin() {
 void GimbalController::command(float yawDeg, float pitchDeg, float dtSeconds) {
   if (!state_.healthy || !state_.torqueOn) return;
   state_.limitActive = false;
-  const float maxStep = cfg::MAX_RATE_DEG_S * dtSeconds;
+  // Keep the filter stable if a slow SD/I2C transaction delayed one control
+  // tick. A longer pause may move at the configured maximum rate, but cannot
+  // create an unbounded command jump.
+  if (dtSeconds < 0.001f) dtSeconds = 0.001f;
+  if (dtSeconds > 0.100f) dtSeconds = 0.100f;
 
   const float normalizedYaw = wrapDeg(yawDeg);
   float safeYaw = normalizedYaw;
@@ -55,27 +61,37 @@ void GimbalController::command(float yawDeg, float pitchDeg, float dtSeconds) {
     }
   }
 
-  safeYaw = rateLimit(safeYaw, filteredYawDeg_, maxStep, &state_.limitActive);
-  safePitch =
-      rateLimit(safePitch, filteredPitchDeg_, maxStep, &state_.limitActive);
-  filteredYawDeg_ = safeYaw;
-  filteredPitchDeg_ = safePitch;
-  state_.yawCommandDeg = safeYaw;
-  state_.pitchCommandDeg = safePitch;
+  if (fabsf(wrapDeg(safeYaw - filteredYawDeg_)) <
+      cfg::GIMBAL_COMMAND_DEADBAND_DEG) {
+    safeYaw = filteredYawDeg_;
+  }
+  if (fabsf(safePitch - filteredPitchDeg_) < cfg::GIMBAL_COMMAND_DEADBAND_DEG) {
+    safePitch = filteredPitchDeg_;
+  }
+  filteredYawDeg_ = smoothAxis(safeYaw, filteredYawDeg_, &yawRateDegS_,
+                               dtSeconds, true, &state_.limitActive);
+  filteredPitchDeg_ = smoothAxis(safePitch, filteredPitchDeg_, &pitchRateDegS_,
+                                 dtSeconds, false, &state_.limitActive);
+  state_.yawCommandDeg = filteredYawDeg_;
+  state_.pitchCommandDeg = filteredPitchDeg_;
 
   if (state_.yawOnline) {
     dxl_.setGoalPosition(cfg::YAW_DXL_ID,
-                         servoDeg(cfg::YAW_SIGN * safeYaw + yawZeroDeg_),
+                         servoDeg(cfg::YAW_SIGN *
+                                      (filteredYawDeg_ + cfg::GIMBAL_YAW_REFERENCE_OFFSET_DEG) +
+                                  yawZeroDeg_),
                          UNIT_DEGREE);
   }
   if (state_.pitchOnline) {
     dxl_.setGoalPosition(cfg::PITCH_DXL_ID,
-                         servoDeg(cfg::PITCH_SIGN * safePitch + pitchZeroDeg_),
+                         servoDeg(cfg::PITCH_SIGN *
+                                      (filteredPitchDeg_ + cfg::GIMBAL_PITCH_REFERENCE_OFFSET_DEG) +
+                                  pitchZeroDeg_),
                          UNIT_DEGREE);
   }
 }
 
-bool GimbalController::calibrateZero() {
+bool GimbalController::captureSoftZero() {
   if (!state_.healthy) return false;
   if (state_.yawOnline) {
     yawZeroDeg_ = servoDeg(
@@ -88,6 +104,8 @@ bool GimbalController::calibrateZero() {
   // Prevent a calibration from being followed by an old rate-limited target.
   filteredYawDeg_ = 0.0f;
   filteredPitchDeg_ = 0.0f;
+  yawRateDegS_ = 0.0f;
+  pitchRateDegS_ = 0.0f;
   state_.yawCommandDeg = 0.0f;
   state_.pitchCommandDeg = 0.0f;
   return true;
@@ -111,7 +129,7 @@ void GimbalController::pollFeedback() {
     state_.yawPresentDeg =
         cfg::YAW_SIGN *
         wrapDeg(dxl_.getPresentPosition(cfg::YAW_DXL_ID, UNIT_DEGREE) -
-                yawZeroDeg_);
+                yawZeroDeg_) - cfg::GIMBAL_YAW_REFERENCE_OFFSET_DEG;
     state_.yawCurrentRaw =
         dxl_.readControlTableItem(PRESENT_CURRENT, cfg::YAW_DXL_ID);
     state_.yawTemperatureC =
@@ -121,7 +139,7 @@ void GimbalController::pollFeedback() {
     state_.pitchPresentDeg =
         cfg::PITCH_SIGN *
         wrapDeg(dxl_.getPresentPosition(cfg::PITCH_DXL_ID, UNIT_DEGREE) -
-                pitchZeroDeg_);
+                pitchZeroDeg_) - cfg::GIMBAL_PITCH_REFERENCE_OFFSET_DEG;
     state_.pitchCurrentRaw =
         dxl_.readControlTableItem(PRESENT_CURRENT, cfg::PITCH_DXL_ID);
     state_.pitchTemperatureC =
@@ -156,16 +174,38 @@ float GimbalController::clampValue(float value, float low, float high) {
   return value < low ? low : (value > high ? high : value);
 }
 
-float GimbalController::rateLimit(float target, float current, float maxStep,
-                                  bool* limited) {
-  const float delta = target - current;
-  if (delta > maxStep) {
-    *limited = true;
-    return current + maxStep;
-  }
-  if (delta < -maxStep) {
-    *limited = true;
-    return current - maxStep;
-  }
+float GimbalController::moveToward(float value, float target, float maxDelta) {
+  if (target > value + maxDelta) return value + maxDelta;
+  if (target < value - maxDelta) return value - maxDelta;
   return target;
+}
+
+float GimbalController::smoothAxis(float target, float current,
+                                   float* rateDegS, float dtSeconds,
+                                   bool circular, bool* limited) {
+  const float rawDelta = circular ? wrapDeg(target - current) : target - current;
+  const float alpha = dtSeconds /
+      (cfg::GIMBAL_TARGET_FILTER_TIME_CONSTANT_S + dtSeconds);
+  const float filteredDelta = rawDelta * alpha;
+  const float desiredRate = clampValue(filteredDelta / dtSeconds,
+                                       -cfg::MAX_RATE_DEG_S,
+                                       cfg::MAX_RATE_DEG_S);
+  const float maxRateDelta = cfg::MAX_ACCEL_DEG_S2 * dtSeconds;
+  float nextRate = moveToward(*rateDegS, desiredRate, maxRateDelta);
+  float step = nextRate * dtSeconds;
+
+  // Never overshoot a nearby target. Reset the velocity only after arriving;
+  // otherwise short GPS target changes are still eased by acceleration.
+  if (fabsf(rawDelta) > cfg::GIMBAL_COMMAND_DEADBAND_DEG &&
+      ((rawDelta >= 0.0f && step >= rawDelta) ||
+       (rawDelta < 0.0f && step <= rawDelta))) {
+    step = rawDelta;
+    nextRate = 0.0f;
+  }
+  if (fabsf(rawDelta) > cfg::GIMBAL_COMMAND_DEADBAND_DEG ||
+      fabsf(nextRate - *rateDegS) > 0.01f) {
+    *limited = true;
+  }
+  *rateDegS = nextRate;
+  return circular ? wrapDeg(current + step) : current + step;
 }

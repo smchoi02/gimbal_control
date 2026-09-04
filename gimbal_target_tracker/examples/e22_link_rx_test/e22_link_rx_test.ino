@@ -1,4 +1,4 @@
-// E22-900T22S receive validation for the real trs_test.ino transmitter.
+// E22-900T22S receive validation for the real final_test.ino transmitter.
 // Standalone sketch: no project-relative includes are required.
 // Expected packet: RK, 34 bytes, little-endian, CRC-16/CCITT-FALSE.
 // Serial Monitor: 115200 baud. E22 UART: Serial3, 9600 baud.
@@ -148,7 +148,7 @@ void printPacket(const RkPacket& packet) {
 void setup() {
   Serial.begin(115200);
   E22_SERIAL.begin(E22_UART_BAUD);
-  Serial.println(F("# E22-900T22S RX test: trs_test RK packet validation"));
+  Serial.println(F("# E22-900T22S RX test: final_test RK packet validation"));
   Serial.println(F("# M0/M1=LOW; 900 MHz channel, NETID, air-rate, and encryption must match TX."));
 }
 

@@ -13,10 +13,25 @@ constexpr float METERS_PER_I7_LAT = 0.0111320f;
 constexpr float BARO_EXPONENT = 0.190263f;
 constexpr float BARO_SCALE_M = 44330.77f;
 
-// Positive result means the remote transmitter is above this payload.
-inline bool relativeNed(const GpsFix& local, const RemoteTargetSample& remote,
-                        float ned[3]) {
-  if (!local.valid || !remote.valid) return false;
+static_assert(cfg::IMU_TO_GIMBAL_X_AXIS < 3 &&
+                  cfg::IMU_TO_GIMBAL_Y_AXIS < 3 &&
+                  cfg::IMU_TO_GIMBAL_Z_AXIS < 3,
+              "IMU-to-gimbal axis index must be 0, 1, or 2");
+static_assert(cfg::IMU_TO_GIMBAL_X_AXIS != cfg::IMU_TO_GIMBAL_Y_AXIS &&
+                  cfg::IMU_TO_GIMBAL_X_AXIS != cfg::IMU_TO_GIMBAL_Z_AXIS &&
+                  cfg::IMU_TO_GIMBAL_Y_AXIS != cfg::IMU_TO_GIMBAL_Z_AXIS,
+              "IMU-to-gimbal axis indices must be a permutation");
+
+// NED is the one navigation frame used by this tracker: North/East/Down in m.
+// `initialBaroBiasM` is captured while rocket and payload are co-located:
+// rocketAGL - payloadAGL. Positive relativeUp means the rocket is above the
+// payload, and therefore NED down is negative.
+inline bool relativeNed(const GpsFix& local, const BarometerSample& localBaro,
+                        const RemoteTargetSample& remote,
+                        float initialBaroBiasM, float ned[3]) {
+  if (!local.valid || !localBaro.valid || !localBaro.referenceValid ||
+      !remote.valid || !isfinite(localBaro.aglM) ||
+      !isfinite(initialBaroBiasM)) return false;
 
   const int64_t dLatI7 = static_cast<int64_t>(remote.latI7) - local.latI7;
   const int64_t dLonI7 = static_cast<int64_t>(remote.lonI7) - local.lonI7;
@@ -26,15 +41,27 @@ inline bool relativeNed(const GpsFix& local, const RemoteTargetSample& remote,
 
   ned[0] = static_cast<float>(dLatI7) * METERS_PER_I7_LAT;
   ned[1] = static_cast<float>(dLonI7) * METERS_PER_I7_LAT * cosLat;
-  // The TRS RK packet carries altitude above its launch/ground reference.
-  // This tracker therefore assumes its own origin is the same reference.
-  const float remoteAboveM = remote.aglM;
-  if (!isfinite(remoteAboveM) ||
-      fabsf(remoteAboveM) > cfg::MAX_ABS_RELATIVE_ALT_M) {
+  const float relativeUpM = remote.aglM - localBaro.aglM - initialBaroBiasM;
+  if (!isfinite(relativeUpM) ||
+      fabsf(relativeUpM) > cfg::MAX_ABS_RELATIVE_ALT_M) {
     return false;
   }
-  ned[2] = -remoteAboveM;  // NED down-positive.
+  ned[2] = -relativeUpM;  // NED is down-positive.
   return true;
+}
+
+inline float horizontalRangeM(const float ned[3]) {
+  return sqrtf(ned[0] * ned[0] + ned[1] * ned[1]);
+}
+
+inline void imuBodyToGimbalBody(const float imuBody[3], float gimbalBody[3]) {
+  const float source[3] = {imuBody[0], imuBody[1], imuBody[2]};
+  gimbalBody[0] = cfg::IMU_TO_GIMBAL_X_SIGN *
+                  source[cfg::IMU_TO_GIMBAL_X_AXIS];
+  gimbalBody[1] = cfg::IMU_TO_GIMBAL_Y_SIGN *
+                  source[cfg::IMU_TO_GIMBAL_Y_AXIS];
+  gimbalBody[2] = cfg::IMU_TO_GIMBAL_Z_SIGN *
+                  source[cfg::IMU_TO_GIMBAL_Z_AXIS];
 }
 
 inline bool pointingAngles(const float ned[3], const float q[4],
@@ -46,7 +73,9 @@ inline bool pointingAngles(const float ned[3], const float q[4],
 
   float body[3];
   attitude::nedToBody(ned, q, body);
-  attitude::bodyToGimbal(body, &result->yawDeg, &result->pitchDeg);
+  float gimbalBody[3];
+  imuBodyToGimbalBody(body, gimbalBody);
+  attitude::bodyToGimbal(gimbalBody, &result->yawDeg, &result->pitchDeg);
   result->northM = ned[0];
   result->eastM = ned[1];
   result->downM = ned[2];

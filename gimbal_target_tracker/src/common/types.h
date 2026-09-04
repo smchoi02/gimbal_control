@@ -3,10 +3,30 @@
 #include <stdint.h>
 
 enum class TrackMode : uint8_t {
-  STOW = 0,
-  TRACK = 1,
-  HOLD_LAST_DIRECTION = 2,
-  FAULT = 3
+  BOOT = 0,
+  WAIT_FOR_DATA = 1,
+  ALIGNING = 2,
+  TRACKING = 3,
+  SAFE_HOLD = 4,
+  FAULT = 5
+};
+
+// SAFE_HOLD preserves the last valid line of sight with live IMU compensation;
+// it never means "go home".
+enum class TrackingBlocker : uint8_t {
+  NONE = 0,
+  GIMBAL_FAULT,
+  ALIGNMENT_IN_PROGRESS,
+  ALIGNMENT_UNSTABLE,
+  BARO_REFERENCE_NOT_READY,
+  BARO_BIAS_NOT_READY,
+  REMOTE_PACKET_STALE,
+  REMOTE_GPS_INVALID,
+  LOCAL_GPS_INVALID,
+  LOCAL_BARO_INVALID,
+  IMU_INVALID,
+  RANGE_TOO_SMALL,
+  GEOMETRY_INVALID
 };
 
 struct AttitudeSample {
@@ -24,7 +44,11 @@ struct AttitudeSample {
 struct BarometerSample {
   float pressurePa = 0.0f;
   float temperatureC = 0.0f;
+  // Altitude above this payload's own pressure reference. It is not MSL.
+  float aglM = 0.0f;
+  float referencePressurePa = 0.0f;
   uint32_t timestampMs = 0;
+  bool referenceValid = false;
   bool valid = false;
 };
 
@@ -44,20 +68,17 @@ struct GpsFix {
 
 struct RemoteTargetSample {
   uint8_t sequence = 0;
-  uint32_t senderTimeMs = 0;
+  // UBX NAV-PVT iTOW from the rocket. Freshness always uses timestampMs,
+  // the local E22 receive time, rather than this sender clock.
+  uint32_t senderITowMs = 0;
   int32_t latI7 = 0;
   int32_t lonI7 = 0;
   float aglM = 0.0f;
   float velNMps = 0.0f;
   float velEMps = 0.0f;
   float velDMps = 0.0f;
-  uint8_t imuFlags = 0;
-  uint8_t quatAccuracy = 0;
-  uint16_t imuAgeMs = 0;
-  float accelMps2[3] = {};
-  float gyroDps[3] = {};
-  float quaternion[4] = {1.0f, 0.0f, 0.0f, 0.0f};
-  uint8_t satelliteCount = 0;
+  // final_test byte 3: UBX NAV-PVT fixType, not satellite count.
+  uint8_t fixType = 0;
   uint32_t timestampMs = 0;
   bool valid = false;
 };

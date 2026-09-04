@@ -1,5 +1,7 @@
 #include "bmp581_sensor.h"
 
+#include <math.h>
+
 bool Bmp581Sensor::begin(uint8_t address) {
   address_ = address;
   if (!readRegisters(REG_CHIP_ID, &chipId_, 1)) return false;
@@ -29,7 +31,17 @@ bool Bmp581Sensor::begin(uint8_t address) {
   uint8_t effective = 0;
   if (!readRegisters(REG_OSR_EFF, &effective, 1)) return false;
   present_ = (effective & 0x80u) != 0;  // ODR setting accepted.
+  if (present_) startReferenceCalibration(50);
   return present_;
+}
+
+void Bmp581Sensor::startReferenceCalibration(uint16_t sampleCount) {
+  referenceSumPa_ = 0.0f;
+  referenceCount_ = 0;
+  referenceTargetCount_ = sampleCount == 0 ? 1 : sampleCount;
+  sample_.referencePressurePa = 0.0f;
+  sample_.referenceValid = false;
+  sample_.aglM = 0.0f;
 }
 
 bool Bmp581Sensor::poll(uint32_t nowMs) {
@@ -54,6 +66,25 @@ bool Bmp581Sensor::poll(uint32_t nowMs) {
   sample_.valid = isfinite(sample_.pressurePa) &&
                   sample_.pressurePa >= 30000.0f &&
                   sample_.pressurePa <= 125000.0f;
+  if (!sample_.valid) return false;
+
+  if (!sample_.referenceValid && referenceTargetCount_ > 0) {
+    ++referenceCount_;
+    referenceSumPa_ += (sample_.pressurePa - referenceSumPa_) /
+                        static_cast<float>(referenceCount_);
+    if (referenceCount_ >= referenceTargetCount_) {
+      sample_.referencePressurePa = referenceSumPa_;
+      sample_.referenceValid = isfinite(sample_.referencePressurePa) &&
+                               sample_.referencePressurePa > 0.0f;
+      referenceTargetCount_ = 0;
+    }
+  }
+  if (sample_.referenceValid) {
+    sample_.aglM = 44330.77f *
+        (1.0f - powf(sample_.pressurePa / sample_.referencePressurePa,
+                     0.190263f));
+    if (!isfinite(sample_.aglM)) sample_.referenceValid = false;
+  }
   return sample_.valid;
 }
 

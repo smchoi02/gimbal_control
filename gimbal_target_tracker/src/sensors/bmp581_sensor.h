@@ -13,6 +13,8 @@ class Bmp581Sensor {
 
   bool begin(uint8_t address);
   bool poll(uint32_t nowMs);
+  // Start a non-blocking reference-pressure average. Call while stationary.
+  void startReferenceCalibration(uint16_t sampleCount);
 
   bool present() const { return present_; }
   uint8_t chipId() const { return chipId_; }
@@ -33,6 +35,9 @@ class Bmp581Sensor {
   uint8_t address_ = 0;
   uint8_t chipId_ = 0;
   bool present_ = false;
+  float referenceSumPa_ = 0.0f;
+  uint16_t referenceCount_ = 0;
+  uint16_t referenceTargetCount_ = 0;
 
   bool readRegisters(uint8_t reg, uint8_t* data, size_t length);
   bool writeRegister(uint8_t reg, uint8_t value);

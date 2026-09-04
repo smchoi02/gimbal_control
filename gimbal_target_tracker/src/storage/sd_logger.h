@@ -8,10 +8,12 @@
 class SdLogger {
  public:
   bool begin(uint8_t chipSelectPin);
-  void log(uint32_t nowMs, TrackMode mode, const AttitudeSample& attitude,
+  void log(uint32_t nowMs, TrackMode mode, TrackingBlocker blocker,
+           const AttitudeSample& attitude,
            const BarometerSample& localBaro, const GpsFix& localGps,
            const RemoteTargetSample& remote, const RelativeTarget& relative,
-           const GimbalState& gimbal);
+           const GimbalState& gimbal, float initialBaroBiasM,
+           bool baroBiasReady);
   void service(uint32_t nowMs);
 
   bool ready() const { return ready_; }

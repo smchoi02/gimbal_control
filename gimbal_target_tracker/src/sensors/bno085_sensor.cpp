@@ -45,11 +45,14 @@ bool Bno085Sensor::poll(uint32_t nowMs) {
 
   float newQ[4];
   if (useGameRotationVector_) {
+    // SparkFun exposes real/scalar then i/j/k vector components. Keep the
+    // project-wide quaternion contract explicitly as [w, x, y, z].
     newQ[0] = device_.getGameQuatReal();
     newQ[1] = device_.getGameQuatI();
     newQ[2] = device_.getGameQuatJ();
     newQ[3] = device_.getGameQuatK();
   } else {
+    // Same [w, x, y, z] ordering for the magnetic Rotation Vector path.
     newQ[0] = device_.getQuatReal();
     newQ[1] = device_.getQuatI();
     newQ[2] = device_.getQuatJ();

@@ -27,13 +27,22 @@ class TrackerApp {
   GimbalController gimbal_;
   SdLogger logger_;
 
-  TrackMode mode_ = TrackMode::STOW;
+  TrackMode mode_ = TrackMode::BOOT;
+  TrackingBlocker blocker_ = TrackingBlocker::BARO_BIAS_NOT_READY;
   RelativeTarget relative_;
-  float lastDirectionNed_[3] = {1.0f, 0.0f, 0.0f};
-  bool haveLastDirection_ = false;
-  bool trackingEnabled_ = true;
+  // Last target in the IMU/alignment reference frame. It enables immediate
+  // IMU-only stabilization and later preserves LOS during data loss.
+  float lastTargetNed_[3] = {1.0f, 0.0f, 0.0f};
+  bool haveLastTargetNed_ = false;
+  bool imuHoldReferenceReady_ = false;
+  bool baroBiasCaptureActive_ = false;
+  bool baroBiasReady_ = false;
+  float initialBaroBiasM_ = 0.0f;
+  float baroBiasSumM_ = 0.0f;
+  uint16_t baroBiasSamples_ = 0;
+
   // Averaged while the user holds the gimbal aimed at the transmitter during
-  // the initial alignment window.
+  // an explicit initial alignment window.
   float localImuReferenceQ_[4] = {1.0f, 0.0f, 0.0f, 0.0f};
   float initialImuSum_[4] = {};
   float initialTargetDirectionSum_[3] = {};
@@ -42,6 +51,10 @@ class TrackerApp {
   uint32_t initialAlignmentStartMs_ = 0;
   uint16_t initialAlignmentSamples_ = 0;
   bool trackingReferenceReady_ = false;
+  bool haveAlignmentSequence_ = false;
+  uint8_t lastAlignmentSequence_ = 0;
+  bool haveBaroBiasSequence_ = false;
+  uint8_t lastBaroBiasSequence_ = 0;
 
   uint32_t lastControlUs_ = 0;
   uint32_t lastBaroUs_ = 0;
@@ -49,19 +62,24 @@ class TrackerApp {
   uint32_t lastLogUs_ = 0;
   uint32_t lastStatusMs_ = 0;
 
-  char commandBuffer_[48] = {};
-  uint8_t commandLength_ = 0;
-
   void controlTick(uint32_t nowMs, float dtSeconds);
   void logTick(uint32_t nowMs);
   void printStatus(uint32_t nowMs);
-  void pollCommands();
-  void handleCommand(char* line);
   bool trackingInputsFresh(uint32_t nowMs) const;
   bool attitudeFresh(uint32_t nowMs) const;
+  bool localBarometerFresh(uint32_t nowMs) const;
+  bool alignmentInputsFresh(uint32_t nowMs) const;
+  TrackingBlocker inputBlocker(uint32_t nowMs) const;
+  bool captureBaroBiasSample(uint32_t nowMs);
+  bool targetGeometry(float ned[3], RelativeTarget* calculated) const;
+  bool initializeImuHold(uint32_t nowMs);
+  bool commandHeldDirection(float dtSeconds);
+  void enterSafeHold(TrackingBlocker blocker, bool disableTracking);
   void resetInitialAlignment(uint32_t nowMs);
   void collectInitialAlignmentSample(uint32_t nowMs);
   bool finishInitialAlignment(uint32_t nowMs);
+  static const char* modeName(TrackMode mode);
+  static const char* blockerName(TrackingBlocker blocker);
   const GpsFix& localGpsInput() const;
   const BarometerSample& localBarometerInput() const;
   const RemoteTargetSample& remoteInput() const;

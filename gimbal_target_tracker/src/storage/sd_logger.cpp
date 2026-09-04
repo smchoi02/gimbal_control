@@ -26,26 +26,24 @@ bool SdLogger::createUniqueFile() {
 void SdLogger::writeHeader() {
   file_.println(
       F("t_ms,mode,imu_valid,qw,qx,qy,qz,yaw_deg,pitch_deg,roll_deg,"
-        "local_baro_valid,local_pressure_pa,local_temp_c,"
+        "blocker,local_baro_valid,local_baro_reference_valid,local_pressure_pa,local_temp_c,local_agl_m,local_reference_pa,"
         "local_gps_valid,local_itow_ms,local_lat_i7,local_lon_i7,"
         "local_hmsl_mm,local_fix_type,local_num_sv,"
-        "remote_valid,remote_seq,remote_sender_ms,remote_lat_i7,remote_lon_i7,"
-        "remote_agl_m,remote_vel_n_mps,remote_vel_e_mps,remote_vel_d_mps,remote_satellites,"
-        "remote_imu_flags,remote_quat_acc,remote_imu_age_ms,"
-        "remote_ax,remote_ay,remote_az,remote_gx,remote_gy,remote_gz,"
-        "remote_qw,remote_qx,remote_qy,remote_qz,"
-        "rel_n_m,rel_e_m,rel_d_m,range_m,target_yaw_deg,target_pitch_deg,"
+        "remote_valid,remote_seq,remote_itow_ms,remote_lat_i7,remote_lon_i7,"
+        "remote_agl_m,remote_vel_n_mps,remote_vel_e_mps,remote_vel_d_mps,remote_fix_type,"
+        "initial_baro_bias_m,baro_bias_ready,rel_n_m,rel_e_m,rel_d_m,rel_up_m,range_m,target_yaw_deg,target_pitch_deg,"
         "gimbal_yaw_cmd,gimbal_pitch_cmd,gimbal_yaw_pos,gimbal_pitch_pos,"
         "gimbal_cur_y,gimbal_cur_p,gimbal_temp_y,gimbal_temp_p,"
         "gimbal_limit,gimbal_torque"));
 }
 
-void SdLogger::log(uint32_t nowMs, TrackMode mode,
+void SdLogger::log(uint32_t nowMs, TrackMode mode, TrackingBlocker blocker,
                    const AttitudeSample& attitude,
                    const BarometerSample& localBaro, const GpsFix& localGps,
                    const RemoteTargetSample& remote,
                    const RelativeTarget& relative,
-                   const GimbalState& gimbal) {
+                   const GimbalState& gimbal, float initialBaroBiasM,
+                   bool baroBiasReady) {
   if (!ready_) return;
 
 #define CSV_VALUE(...)      \
@@ -64,9 +62,13 @@ void SdLogger::log(uint32_t nowMs, TrackMode mode,
   CSV_VALUE(attitude.yawDeg, 3);
   CSV_VALUE(attitude.pitchDeg, 3);
   CSV_VALUE(attitude.rollDeg, 3);
+  CSV_VALUE(static_cast<uint8_t>(blocker));
   CSV_VALUE(localBaro.valid ? 1 : 0);
+  CSV_VALUE(localBaro.referenceValid ? 1 : 0);
   CSV_VALUE(localBaro.pressurePa, 2);
   CSV_VALUE(localBaro.temperatureC, 2);
+  CSV_VALUE(localBaro.aglM, 3);
+  CSV_VALUE(localBaro.referencePressurePa, 2);
   CSV_VALUE(localGps.valid ? 1 : 0);
   CSV_VALUE(localGps.iTowMs);
   CSV_VALUE(localGps.latI7);
@@ -76,30 +78,20 @@ void SdLogger::log(uint32_t nowMs, TrackMode mode,
   CSV_VALUE(localGps.numSv);
   CSV_VALUE(remote.valid ? 1 : 0);
   CSV_VALUE(remote.sequence);
-  CSV_VALUE(remote.senderTimeMs);
+  CSV_VALUE(remote.senderITowMs);
   CSV_VALUE(remote.latI7);
   CSV_VALUE(remote.lonI7);
   CSV_VALUE(remote.aglM, 3);
   CSV_VALUE(remote.velNMps, 3);
   CSV_VALUE(remote.velEMps, 3);
   CSV_VALUE(remote.velDMps, 3);
-  CSV_VALUE(remote.satelliteCount);
-  CSV_VALUE(remote.imuFlags);
-  CSV_VALUE(remote.quatAccuracy);
-  CSV_VALUE(remote.imuAgeMs);
-  CSV_VALUE(remote.accelMps2[0], 3);
-  CSV_VALUE(remote.accelMps2[1], 3);
-  CSV_VALUE(remote.accelMps2[2], 3);
-  CSV_VALUE(remote.gyroDps[0], 3);
-  CSV_VALUE(remote.gyroDps[1], 3);
-  CSV_VALUE(remote.gyroDps[2], 3);
-  CSV_VALUE(remote.quaternion[0], 5);
-  CSV_VALUE(remote.quaternion[1], 5);
-  CSV_VALUE(remote.quaternion[2], 5);
-  CSV_VALUE(remote.quaternion[3], 5);
+  CSV_VALUE(remote.fixType);
+  CSV_VALUE(initialBaroBiasM, 3);
+  CSV_VALUE(baroBiasReady ? 1 : 0);
   CSV_VALUE(relative.northM, 3);
   CSV_VALUE(relative.eastM, 3);
   CSV_VALUE(relative.downM, 3);
+  CSV_VALUE(relative.valid ? -relative.downM : 0.0f, 3);
   CSV_VALUE(relative.rangeM, 3);
   CSV_VALUE(relative.yawDeg, 3);
   CSV_VALUE(relative.pitchDeg, 3);
