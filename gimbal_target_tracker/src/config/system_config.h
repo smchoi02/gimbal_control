@@ -13,7 +13,6 @@ constexpr uint32_t STATUS_PERIOD_MS = 1000;
 constexpr uint32_t INITIAL_ALIGNMENT_MS = 10000;
 constexpr uint16_t INITIAL_ALIGNMENT_MIN_SAMPLES = 30;  // E22 frames
 constexpr float MAX_ALIGNMENT_ANGULAR_RATE_DPS = 10.0f;
-constexpr float MAX_ALIGNMENT_DIRECTION_SPREAD_DEG = 10.0f;
 constexpr uint16_t BARO_REFERENCE_SAMPLES = 50;
 constexpr uint16_t BARO_BIAS_MIN_SAMPLES = 30;  // E22 frames
 
@@ -90,8 +89,8 @@ constexpr float IMU_TO_GIMBAL_Z_SIGN = 1.0f;
 
 // NED tracking geometry, all lengths in metres.
 constexpr float MIN_TARGET_RANGE_M = 1.0f;
-constexpr float MIN_TRACK_HORIZONTAL_RANGE_M = 15.0f;
-constexpr float MIN_ALIGNMENT_HORIZONTAL_RANGE_M = 30.0f;
+constexpr float MIN_TRACK_HORIZONTAL_RANGE_M = 5.0f;
+constexpr float MIN_ALIGNMENT_HORIZONTAL_RANGE_M = 5.0f;
 constexpr float MAX_BARO_BIAS_HORIZONTAL_RANGE_M = 30.0f;
 constexpr float MAX_ABS_RELATIVE_ALT_M = 30000.0f;
 constexpr float MAX_ABS_VELOCITY_MPS = 5000.0f;

@@ -355,20 +355,12 @@ void TrackerApp::collectInitialAlignmentSample(uint32_t nowMs) {
                                fmaxf(fabsf(imu.angularRateDps[1]),
                                      fabsf(imu.angularRateDps[2])));
   if (maxRate > cfg::MAX_ALIGNMENT_ANGULAR_RATE_DPS) {
+    // A moving payload invalidates the current alignment window. Discard its
+    // old average so that, once it is still again, a clean 10-second window
+    // starts automatically instead of remaining permanently UNSTABLE.
+    resetInitialAlignment(nowMs);
     blocker_ = TrackingBlocker::ALIGNMENT_UNSTABLE;
     return;
-  }
-  if (initialAlignmentSamples_ > 0) {
-    float mean[3] = {initialTargetDirectionSum_[0], initialTargetDirectionSum_[1],
-                     initialTargetDirectionSum_[2]};
-    target_geometry::normalizeDirection(mean, mean);
-    const float dot = mean[0] * targetNed[0] + mean[1] * targetNed[1] +
-                      mean[2] * targetNed[2];
-    if (dot < cosf(cfg::MAX_ALIGNMENT_DIRECTION_SPREAD_DEG *
-                   attitude::DEG_TO_RAD_F)) {
-      blocker_ = TrackingBlocker::ALIGNMENT_UNSTABLE;
-      return;
-    }
   }
   float sign = 1.0f;
   if (initialAlignmentSamples_ > 0 &&

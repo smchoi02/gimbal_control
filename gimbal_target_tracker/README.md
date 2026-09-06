@@ -39,6 +39,8 @@ BOOT → WAIT → ALIGN → TRACK
 - When remote GPS, local GPS, local barometer, IMU, and LoRa are all valid, it
   automatically aligns for 10 seconds and starts tracking. The gimbal must be
   physically aimed at the intended reference direction during this interval.
+- If the payload moves faster than the alignment IMU-rate limit, the 10-second
+  alignment timer automatically restarts once it becomes still.
 - GPS azimuth is rejected below the configured horizontal distance threshold.
 - In `TRACK`, the gimbal tracks the newest rocket direction.
 - In `HOLD`, it retains the last valid world direction and uses live IMU data
