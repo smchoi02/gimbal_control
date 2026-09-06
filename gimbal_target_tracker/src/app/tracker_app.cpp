@@ -16,6 +16,7 @@ void TrackerApp::begin() {
   if (baroOk) barometer_.startReferenceCalibration(cfg::BARO_REFERENCE_SAMPLES);
   gps_.begin(cfg::MAX_M10S_ADDRESS);
   e22_.begin(cfg::E22_M0_PIN, cfg::E22_M1_PIN, cfg::E22_AUX_PIN);
+  logger_.begin(cfg::SD_CS_PIN);
 
   if (!gimbal_.begin()) {
     mode_ = TrackMode::FAULT;
@@ -27,7 +28,8 @@ void TrackerApp::begin() {
   resetInitialAlignment(millis());
 
   const uint32_t nowUs = micros();
-  lastControlUs_ = lastBaroUs_ = lastGpsPollUs_ = lastLogUs_ = nowUs;
+  lastControlUs_ = lastBaroUs_ = lastGpsPollUs_ = lastGimbalFeedbackUs_ =
+      lastSdLogUs_ = nowUs;
   lastStatusMs_ = millis();
 }
 
@@ -51,9 +53,14 @@ void TrackerApp::update() {
     lastControlUs_ = nowUs;
     controlTick(nowMs, dtSeconds);
   }
-  if (elapsedUs(nowUs, lastLogUs_, cfg::LOG_PERIOD_US)) {
-    lastLogUs_ = nowUs;
-    logTick(nowMs);
+  if (elapsedUs(nowUs, lastGimbalFeedbackUs_,
+                cfg::GIMBAL_FEEDBACK_PERIOD_US)) {
+    lastGimbalFeedbackUs_ = nowUs;
+    gimbalFeedbackTick();
+  }
+  if (elapsedUs(nowUs, lastSdLogUs_, cfg::SD_LOG_PERIOD_US)) {
+    lastSdLogUs_ = nowUs;
+    sdLogTick(nowMs);
   }
   logger_.service(nowMs);
   if (static_cast<uint32_t>(nowMs - lastStatusMs_) >= cfg::STATUS_PERIOD_MS) {
@@ -82,12 +89,6 @@ void TrackerApp::controlTick(uint32_t nowMs, float dtSeconds) {
     // pose and gimbal encoder position, then counter subsequent body tilt.
     if (initializeImuHold(nowMs) && attitudeFresh(nowMs)) {
       commandHeldDirection(dtSeconds);
-    }
-    if (!baroBiasReady_) {
-      blocker_ = localBarometerFresh(nowMs)
-          ? TrackingBlocker::BARO_BIAS_NOT_READY
-          : TrackingBlocker::BARO_REFERENCE_NOT_READY;
-      return;
     }
     if (!alignmentInputsFresh(nowMs)) {
       blocker_ = inputBlocker(nowMs);
@@ -215,14 +216,26 @@ void TrackerApp::enterSafeHold(TrackingBlocker blocker, bool) {
   blocker_ = blocker;
 }
 
-void TrackerApp::logTick(uint32_t nowMs) {
+void TrackerApp::gimbalFeedbackTick() {
   gimbal_.pollFeedback();
   if (!gimbal_.state().healthy) {
     mode_ = TrackMode::FAULT;
     blocker_ = TrackingBlocker::GIMBAL_FAULT;
   }
+}
+
+void TrackerApp::sdLogTick(uint32_t nowMs) {
+  const GpsFix& localGps = localGpsInput();
+  if (!logger_.ready() && logger_.cardReady() &&
+      (localGps.dateValid || nowMs >= cfg::SD_DATE_WAIT_MS)) {
+    logger_.openForDate(localGps.dateValid ? localGps.month : 0,
+                        localGps.dateValid ? localGps.day : 0);
+  } else if (logger_.ready() && logger_.usingFallbackDate() &&
+             localGps.dateValid) {
+    logger_.reopenWithGpsDate(localGps.month, localGps.day);
+  }
   logger_.log(nowMs, mode_, blocker_, imu_.sample(), localBarometerInput(),
-              localGpsInput(), remoteInput(), relative_, gimbal_.state(),
+              localGps, remoteInput(), relative_, gimbal_.state(),
               initialBaroBiasM_, baroBiasReady_);
 }
 
@@ -250,6 +263,9 @@ void TrackerApp::printStatus(uint32_t nowMs) {
   debug_.print(F(" baro=")); debug_.print(remote.aglM, 1); debug_.print('/');
   debug_.print(localBaro.aglM, 1); debug_.print('/');
   debug_.print(initialBaroBiasM_, 1);
+  debug_.print(F(" bias="));
+  debug_.print(baroBiasReady_ ? F("ready") : F("pending"));
+  debug_.print('/'); debug_.print(baroBiasSamples_);
   debug_.print(F(" imu_ypr=")); debug_.print(imu.yawDeg, 1); debug_.print('/');
   debug_.print(imu.pitchDeg, 1); debug_.print('/'); debug_.print(imu.rollDeg, 1);
   debug_.print(F(" target=")); debug_.print(relative_.yawDeg, 1); debug_.print('/');
@@ -261,8 +277,10 @@ void TrackerApp::printStatus(uint32_t nowMs) {
 }
 
 bool TrackerApp::trackingInputsFresh(uint32_t nowMs) const {
-  return baroBiasReady_ && trackingReferenceReady_ &&
-         alignmentInputsFresh(nowMs);
+  // Barometer bias is an optional preflight refinement. It must never keep a
+  // valid GPS/IMU/LoRa system in WAIT forever just because the two units were
+  // not within the close-range capture window.
+  return trackingReferenceReady_ && alignmentInputsFresh(nowMs);
 }
 
 bool TrackerApp::alignmentInputsFresh(uint32_t nowMs) const {
@@ -294,7 +312,6 @@ TrackingBlocker TrackerApp::inputBlocker(uint32_t nowMs) const {
   if (!isFresh(nowMs, remoteInput().timestampMs, cfg::REMOTE_TIMEOUT_MS))
     return TrackingBlocker::REMOTE_PACKET_STALE;
   if (!remoteInput().valid) return TrackingBlocker::REMOTE_GPS_INVALID;
-  if (!baroBiasReady_) return TrackingBlocker::BARO_BIAS_NOT_READY;
   return TrackingBlocker::GEOMETRY_INVALID;
 }
 

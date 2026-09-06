@@ -85,6 +85,8 @@ bool UbxNavPvtParser::finish(GpsFix* fix) {
     return false;
   }
   fix->iTowMs = readU32(payload_ + 0);
+  fix->month = payload_[6];
+  fix->day = payload_[7];
   fix->fixType = payload_[20];
   fix->numSv = payload_[23];
   fix->lonI7 = readI32(payload_ + 24);
@@ -94,6 +96,9 @@ bool UbxNavPvtParser::finish(GpsFix* fix) {
   fix->velEMmS = readI32(payload_ + 52);
   fix->velDMmS = readI32(payload_ + 56);
   const bool gnssFixOk = (payload_[21] & 0x01u) != 0;
+  fix->dateValid = (payload_[11] & 0x01u) != 0 &&
+                   fix->month >= 1 && fix->month <= 12 &&
+                   fix->day >= 1 && fix->day <= 31;
   fix->valid = gnssFixOk && (fix->fixType == 3 || fix->fixType == 4);
   return true;
 }

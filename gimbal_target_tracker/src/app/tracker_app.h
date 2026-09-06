@@ -59,11 +59,13 @@ class TrackerApp {
   uint32_t lastControlUs_ = 0;
   uint32_t lastBaroUs_ = 0;
   uint32_t lastGpsPollUs_ = 0;
-  uint32_t lastLogUs_ = 0;
+  uint32_t lastGimbalFeedbackUs_ = 0;
+  uint32_t lastSdLogUs_ = 0;
   uint32_t lastStatusMs_ = 0;
 
   void controlTick(uint32_t nowMs, float dtSeconds);
-  void logTick(uint32_t nowMs);
+  void gimbalFeedbackTick();
+  void sdLogTick(uint32_t nowMs);
   void printStatus(uint32_t nowMs);
   bool trackingInputsFresh(uint32_t nowMs) const;
   bool attitudeFresh(uint32_t nowMs) const;

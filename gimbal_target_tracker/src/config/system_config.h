@@ -8,7 +8,11 @@ namespace cfg {
 constexpr uint32_t CONTROL_PERIOD_US = 20000;   // 50 Hz
 constexpr uint32_t BARO_PERIOD_US = 20000;      // 50 Hz
 constexpr uint32_t GPS_POLL_PERIOD_US = 10000;  // NAV-PVT itself is 10 Hz
-constexpr uint32_t LOG_PERIOD_US = 100000;      // 10 Hz
+constexpr uint32_t GIMBAL_FEEDBACK_PERIOD_US = 100000;  // 10 Hz
+// SD writes are deliberately slower than control. File I/O is synchronous and
+// may stall an MCU briefly; 2 Hz preserves useful flight data without making
+// every 50 Hz control cycle contend with the card.
+constexpr uint32_t SD_LOG_PERIOD_US = 500000;  // 2 Hz
 constexpr uint32_t STATUS_PERIOD_MS = 1000;
 constexpr uint32_t INITIAL_ALIGNMENT_MS = 10000;
 constexpr uint16_t INITIAL_ALIGNMENT_MIN_SAMPLES = 30;  // E22 frames
@@ -40,7 +44,10 @@ constexpr int8_t E22_AUX_PIN = -1;  // Optional; HIGH means ready.
 
 // SD card on the hardware SPI bus.
 constexpr uint8_t SD_CS_PIN = 4;
-constexpr uint32_t SD_FLUSH_PERIOD_MS = 1000;
+constexpr uint32_t SD_FLUSH_PERIOD_MS = 5000;
+// Wait briefly for UTC date from MAX-M10S before choosing a log filename.
+// If it is still unavailable, 0000 is used as the date portion.
+constexpr uint32_t SD_DATE_WAIT_MS = 15000;
 
 // DYNAMIXEL on Serial1 / OpenRB built-in TTL bus.
 constexpr uint8_t YAW_DXL_ID = 1;

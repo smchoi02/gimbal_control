@@ -3,18 +3,38 @@
 #include "../config/system_config.h"
 
 bool SdLogger::begin(uint8_t chipSelectPin) {
-  if (!SD.begin(chipSelectPin)) return false;
-  ready_ = createUniqueFile();
+  cardReady_ = SD.begin(chipSelectPin);
+  return cardReady_;
+}
+
+bool SdLogger::openForDate(uint8_t month, uint8_t day) {
+  if (!cardReady_ || ready_) return ready_;
+  ready_ = createUniqueFile(month, day);
   if (ready_) {
+    usingFallbackDate_ = month == 0 && day == 0;
     writeHeader();
     file_.flush();
   }
   return ready_;
 }
 
-bool SdLogger::createUniqueFile() {
-  for (uint16_t index = 0; index < 1000; ++index) {
-    snprintf(filename_, sizeof(filename_), "TRK%03u.CSV", index);
+bool SdLogger::reopenWithGpsDate(uint8_t month, uint8_t day) {
+  if (!cardReady_ || !ready_ || !usingFallbackDate_ || month == 0 || day == 0)
+    return ready_;
+  // Keep early rows in P0000_NN.CSV, then continue in the dated file once the
+  // GPS has supplied a valid UTC date.
+  file_.flush();
+  file_.close();
+  ready_ = false;
+  return openForDate(month, day);
+}
+
+bool SdLogger::createUniqueFile(uint8_t month, uint8_t day) {
+  for (uint16_t index = 0; index <= 999; ++index) {
+    // The bundled SD library uses 8.3 names. PMMDDNNN.CSV is the readable
+    // on-card equivalent of payload_srad_MMDD_NNN.csv.
+    snprintf(filename_, sizeof(filename_), "P%02u%02u%03u.CSV", month, day,
+             index);
     if (!SD.exists(filename_)) {
       file_ = SD.open(filename_, FILE_WRITE);
       return static_cast<bool>(file_);

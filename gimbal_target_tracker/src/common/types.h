@@ -62,7 +62,10 @@ struct GpsFix {
   int32_t velDMmS = 0;
   uint8_t fixType = 0;
   uint8_t numSv = 0;
+  uint8_t month = 0;  // UTC month from UBX NAV-PVT; zero when unavailable.
+  uint8_t day = 0;    // UTC day from UBX NAV-PVT; zero when unavailable.
   uint32_t timestampMs = 0;
+  bool dateValid = false;
   bool valid = false;
 };
 

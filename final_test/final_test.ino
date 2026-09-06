@@ -7,6 +7,7 @@
     BMP581 SDA -> A4, SCL -> A5
     Uno D1/TX  -> E22 RXD through a 5 V-to-3.3 V level shifter or divider
     E22 TXD    not connected (this is a one-way transmitter)
+    SD module CS -> D10, MOSI -> D11, MISO -> D12, SCK -> D13
     All grounds common; E22 M0=M1=LOW for normal mode.
 
   Output: every 100 ms (10 Hz), emit the 34-byte RocketLink packet:
@@ -15,10 +16,13 @@
   Required libraries:
     - AltSoftSerial
     - SparkFun BMP581 Arduino Library
+    - SD (bundled with the Arduino AVR core)
 */
 
 #include <AltSoftSerial.h>
 #include <Arduino.h>
+#include <SD.h>
+#include <SPI.h>
 #include <Wire.h>
 #include <math.h>
 #include <string.h>
@@ -33,6 +37,12 @@ constexpr uint8_t BARO_SAMPLES_PER_AVERAGE = 10;
 constexpr uint8_t BARO_REFERENCE_SAMPLES = 50;
 constexpr uint32_t GPS_STALE_MS = 300;
 constexpr size_t RK_PACKET_LEN = 34;
+constexpr uint8_t SD_CS_PIN = 10;
+// LoRa remains 10 Hz. SD writes are intentionally decimated so a slow card
+// cannot run after every radio packet and delay the next loop iteration.
+constexpr uint32_t SD_LOG_PERIOD_MS = 500;
+constexpr uint32_t SD_FLUSH_PERIOD_MS = 5000;
+constexpr uint32_t SD_DATE_WAIT_MS = 15000;
 
 struct NavPvtData {
   uint32_t iTowMs;
@@ -55,6 +65,14 @@ NavPvtData lastGoodFix = {};
 bool haveGoodFix = false;
 uint8_t validFixStreak = 0;
 uint32_t lastGoodFixMs = 0;
+uint8_t gpsMonth = 0;
+uint8_t gpsDay = 0;
+bool gpsDateValid = false;
+uint16_t gpsYear = 2000;
+uint8_t gpsHour = 0;
+uint8_t gpsMinute = 0;
+uint8_t gpsSecond = 0;
+bool gpsUtcValid = false;
 
 float referencePressurePa = NAN;
 float pressureSumPa = 0.0f;
@@ -69,6 +87,13 @@ uint32_t packetsSent = 0;
 uint32_t gpsPvtCount = 0;
 uint32_t gpsValidCount = 0;
 uint32_t baroAverageCount = 0;
+File sdLogFile;
+char sdLogFilename[13] = {};
+bool sdCardAvailable = false;
+bool sdLoggingAvailable = false;
+bool sdLogUsesFallbackDate = false;
+uint32_t lastSdLogMs = 0;
+uint32_t lastSdFlushMs = 0;
 
 // UBX NAV-PVT parser state; NAV-PVT payload is exactly 92 bytes.
 uint8_t ubxState = 0;
@@ -79,6 +104,19 @@ uint8_t ubxCkB = 0;
 uint16_t ubxLength = 0;
 uint16_t ubxIndex = 0;
 uint8_t navPayload[92] = {};
+
+// Used by the bundled SD library whenever it creates or updates a FAT
+// directory entry. Until GPS UTC is valid, retain its documented 2000-01-01
+// fallback rather than inventing a wall-clock time.
+void setSdFatTimestamp(uint16_t* date, uint16_t* time) {
+  if (!gpsUtcValid) {
+    *date = FAT_DATE(2000, 1, 1);
+    *time = FAT_TIME(0, 0, 0);
+    return;
+  }
+  *date = FAT_DATE(gpsYear, gpsMonth, gpsDay);
+  *time = FAT_TIME(gpsHour, gpsMinute, gpsSecond);
+}
 
 uint16_t crc16CcittFalse(const uint8_t* data, size_t length) {
   uint16_t crc = 0xFFFF;
@@ -211,6 +249,31 @@ void acceptNavPvt() {
   fix.velDMmS = static_cast<int32_t>(readU32Le(navPayload + 56));
   fix.sAccMmS = readU32Le(navPayload + 68);
   fix.valid = (fix.fixType == 3 || fix.fixType == 4) && ((navPayload[21] & 0x01) != 0);
+  const uint16_t year = static_cast<uint16_t>(navPayload[4]) |
+                        (static_cast<uint16_t>(navPayload[5]) << 8);
+  const uint8_t month = navPayload[6];
+  const uint8_t day = navPayload[7];
+  const uint8_t hour = navPayload[8];
+  const uint8_t minute = navPayload[9];
+  const uint8_t second = navPayload[10];
+  const uint8_t utcValidity = navPayload[11];
+  if ((utcValidity & 0x01) != 0 && month >= 1 && month <= 12 &&
+      day >= 1 && day <= 31) {
+    gpsMonth = month;
+    gpsDay = day;
+    gpsDateValid = true;
+  }
+  if ((utcValidity & 0x03) == 0x03 && year >= 2000 && year <= 2107 &&
+      month >= 1 && month <= 12 && day >= 1 && day <= 31 && hour <= 23 &&
+      minute <= 59 && second <= 59) {
+    gpsYear = year;
+    gpsMonth = month;
+    gpsDay = day;
+    gpsHour = hour;
+    gpsMinute = minute;
+    gpsSecond = second;
+    gpsUtcValid = true;
+  }
   ++gpsPvtCount;
 
   // Accuracy values are error estimates. These gates do not limit rocket speed.
@@ -310,11 +373,98 @@ void buildRocketPacket(uint8_t packet[RK_PACKET_LEN], uint32_t nowMs) {
   writeU16Le(packet + 32, crc16CcittFalse(packet, 32));
 }
 
+// SD logging is intentionally independent of radio transmission: a missing or
+// failed card never prevents the required 10 Hz RocketLink packet from sending.
+void beginSdLogging() {
+  SdFile::dateTimeCallback(setSdFatTimestamp);
+  sdCardAvailable = SD.begin(SD_CS_PIN);
+}
+
+void tryOpenSdLog(uint32_t nowMs) {
+  if (!sdCardAvailable) return;
+  if (sdLoggingAvailable) {
+    if (!sdLogUsesFallbackDate || !gpsDateValid) return;
+    // Date became valid after the fallback file was started. Preserve the
+    // early rows, then continue in a correctly dated, separately numbered log.
+    sdLogFile.flush();
+    sdLogFile.close();
+    sdLoggingAvailable = false;
+  }
+  if (!gpsDateValid && nowMs < SD_DATE_WAIT_MS) return;
+
+  // Arduino Uno's bundled SD library only supports 8.3 filenames. This is
+  // the on-card form RMMDDNNN.CSV (for example R0906000.CSV).
+  const uint8_t month = gpsDateValid ? gpsMonth : 0;
+  const uint8_t day = gpsDateValid ? gpsDay : 0;
+  for (uint16_t index = 0; index <= 999; ++index) {
+    snprintf(sdLogFilename, sizeof(sdLogFilename), "R%02u%02u%03u.CSV",
+             month, day, index);
+    if (SD.exists(sdLogFilename)) continue;
+    sdLogFile = SD.open(sdLogFilename, FILE_WRITE);
+    if (!sdLogFile) return;
+
+    sdLoggingAvailable = true;
+    sdLogUsesFallbackDate = !gpsDateValid;
+    sdLogFile.println(
+        F("ms,seq,fix_type,gps_fresh,itow_ms,lat_i7,lon_i7,agl_mm,"
+          "vel_n_mm_s,vel_e_mm_s,vel_d_mm_s,hacc_mm,sacc_mm_s,baro_valid,crc16"));
+    sdLogFile.flush();
+    return;
+  }
+}
+
+void logRocketPacketToSd(const uint8_t packet[RK_PACKET_LEN], uint32_t nowMs) {
+  tryOpenSdLog(nowMs);
+  if (!sdLoggingAvailable) return;
+
+  const bool gpsFresh = haveGoodFix && (nowMs - lastGoodFixMs <= GPS_STALE_MS);
+  sdLogFile.print(nowMs);
+  sdLogFile.write(',');
+  sdLogFile.print(packet[2]);
+  sdLogFile.write(',');
+  sdLogFile.print(packet[3]);
+  sdLogFile.write(',');
+  sdLogFile.print(gpsFresh ? 1 : 0);
+  sdLogFile.write(',');
+  sdLogFile.print(gpsFresh ? lastGoodFix.iTowMs : nowMs);
+  sdLogFile.write(',');
+  sdLogFile.print(gpsFresh ? lastGoodFix.latI7 : 0);
+  sdLogFile.write(',');
+  sdLogFile.print(gpsFresh ? lastGoodFix.lonI7 : 0);
+  sdLogFile.write(',');
+  sdLogFile.print(baroValid ? latestAglMm : 0);
+  sdLogFile.write(',');
+  sdLogFile.print(gpsFresh ? lastGoodFix.velNMmS : 0);
+  sdLogFile.write(',');
+  sdLogFile.print(gpsFresh ? lastGoodFix.velEMmS : 0);
+  sdLogFile.write(',');
+  sdLogFile.print(gpsFresh ? lastGoodFix.velDMmS : 0);
+  sdLogFile.write(',');
+  sdLogFile.print(gpsFresh ? lastGoodFix.hAccMm : 0);
+  sdLogFile.write(',');
+  sdLogFile.print(gpsFresh ? lastGoodFix.sAccMmS : 0);
+  sdLogFile.write(',');
+  sdLogFile.print(baroValid ? 1 : 0);
+  sdLogFile.write(',');
+  const uint16_t crc = static_cast<uint16_t>(packet[32]) |
+                       (static_cast<uint16_t>(packet[33]) << 8);
+  sdLogFile.println(crc);
+
+  if (nowMs - lastSdFlushMs >= SD_FLUSH_PERIOD_MS) {
+    sdLogFile.flush();
+    lastSdFlushMs = nowMs;
+  }
+}
+
 void sendRocketPacket(uint32_t nowMs) {
   uint8_t packet[RK_PACKET_LEN];
   buildRocketPacket(packet, nowMs);
   Serial.write(packet, sizeof(packet));
   Serial.flush();
+  if (nowMs - lastSdLogMs >= SD_LOG_PERIOD_MS) {
+    lastSdLogMs = nowMs;
+    logRocketPacketToSd(packet, nowMs);
+  }
   ++packetsSent;
 }
 
@@ -332,6 +482,7 @@ void setup() {
     while (true) delay(1000);
   }
 
+  beginSdLogging();
   configureGps10Hz();
   lastBaroSampleUs = micros();
 }
