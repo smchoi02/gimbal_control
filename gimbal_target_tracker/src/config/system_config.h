@@ -8,7 +8,10 @@ namespace cfg {
 constexpr uint32_t CONTROL_PERIOD_US = 20000;   // 50 Hz
 constexpr uint32_t BARO_PERIOD_US = 20000;      // 50 Hz
 constexpr uint32_t GPS_POLL_PERIOD_US = 10000;  // NAV-PVT itself is 10 Hz
-constexpr uint32_t GIMBAL_FEEDBACK_PERIOD_US = 100000;  // 10 Hz
+// Present-position/current/temperature reads are request-response UART
+// transactions. Keep them off the 50 Hz command path; commands still run at
+// 50 Hz while feedback is sampled at 2 Hz for health/diagnostics.
+constexpr uint32_t GIMBAL_FEEDBACK_PERIOD_US = 500000;  // 2 Hz
 // SD writes are deliberately slower than control. File I/O is synchronous and
 // may stall an MCU briefly; 2 Hz preserves useful flight data without making
 // every 50 Hz control cycle contend with the card.
@@ -25,6 +28,15 @@ constexpr uint32_t IMU_TIMEOUT_MS = 200;
 constexpr uint32_t LOCAL_BARO_TIMEOUT_MS = 300;
 constexpr uint32_t LOCAL_GPS_TIMEOUT_MS = 1500;
 constexpr uint32_t REMOTE_TIMEOUT_MS = 1000;
+// A GPS that briefly resumes must remain healthy for this long before its
+// changing position is allowed back into TRACK. During this interval the
+// gimbal continuously holds the prior line of sight using the IMU.
+constexpr uint32_t TRACK_REACQUIRE_STABLE_MS = 500;
+// Recover only a silent MAX-M10S output stream. This is not used for a real
+// no-fix condition: incoming NAV-PVT frames, including fixType=0, reset the
+// silence timer.
+constexpr uint32_t GPS_NAV_PVT_SILENCE_RECOVERY_MS = 3000;
+constexpr uint32_t GPS_RECOVERY_RETRY_MS = 5000;
 
 // Shared I2C bus: OpenRB-150 D11=SDA, D12=SCL.
 constexpr uint32_t I2C_CLOCK_HZ = 400000;

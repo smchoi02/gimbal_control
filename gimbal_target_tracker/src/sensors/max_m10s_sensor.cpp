@@ -1,5 +1,7 @@
 #include "max_m10s_sensor.h"
 
+#include "../config/system_config.h"
+
 namespace {
 
 uint32_t readU32(const uint8_t* data) {
@@ -107,7 +109,10 @@ bool MaxM10sSensor::begin(uint8_t address) {
   address_ = address;
   wire_.beginTransmission(address_);
   present_ = wire_.endTransmission() == 0;
-  if (present_) configure10Hz();
+  if (present_) {
+    configure10Hz();
+    lastRecoveryAttemptMs_ = millis();
+  }
   return present_;
 }
 
@@ -135,6 +140,17 @@ bool MaxM10sSensor::configure10Hz() {
 
 bool MaxM10sSensor::poll(uint32_t nowMs) {
   if (!present_) return false;
+  // The I2C address can still ACK while the GPS has stopped publishing
+  // NAV-PVT. Re-assert the RAM-only 10 Hz output setting after a sustained
+  // silent period; never do this repeatedly or for ordinary no-fix frames.
+  const uint32_t silentSinceMs = lastNavPvtMs_ == 0
+      ? lastRecoveryAttemptMs_ : lastNavPvtMs_;
+  if (nowMs - silentSinceMs >= cfg::GPS_NAV_PVT_SILENCE_RECOVERY_MS &&
+      nowMs - lastRecoveryAttemptMs_ >= cfg::GPS_RECOVERY_RETRY_MS) {
+    configure10Hz();
+    lastRecoveryAttemptMs_ = nowMs;
+    ++recoveryCount_;
+  }
   uint16_t available = bytesAvailable();
   bool gotFix = false;
 
@@ -149,6 +165,7 @@ bool MaxM10sSensor::poll(uint32_t nowMs) {
     while (wire_.available()) {
       if (parser_.feed(static_cast<uint8_t>(wire_.read()), &fix_)) {
         fix_.timestampMs = nowMs;
+        lastNavPvtMs_ = nowMs;
         gotFix = true;
       }
     }

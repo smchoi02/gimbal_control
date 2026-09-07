@@ -46,6 +46,7 @@ class MaxM10sSensor {
 
   bool present() const { return present_; }
   const GpsFix& fix() const { return fix_; }
+  uint32_t recoveryCount() const { return recoveryCount_; }
 
  private:
   TwoWire& wire_;
@@ -53,6 +54,9 @@ class MaxM10sSensor {
   GpsFix fix_;
   uint8_t address_ = 0;
   bool present_ = false;
+  uint32_t lastNavPvtMs_ = 0;
+  uint32_t lastRecoveryAttemptMs_ = 0;
+  uint32_t recoveryCount_ = 0;
 
   uint16_t bytesAvailable();
   bool sendValset(const uint8_t* body, size_t bodyLength);

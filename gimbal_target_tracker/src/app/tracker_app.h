@@ -62,6 +62,8 @@ class TrackerApp {
   uint32_t lastGimbalFeedbackUs_ = 0;
   uint32_t lastSdLogUs_ = 0;
   uint32_t lastStatusMs_ = 0;
+  // Zero means there is no uninterrupted healthy input window yet.
+  uint32_t trackingRecoveryStartMs_ = 0;
 
   void controlTick(uint32_t nowMs, float dtSeconds);
   void gimbalFeedbackTick();

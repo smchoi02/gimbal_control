@@ -10,7 +10,7 @@
 
 ## 자동 동작 흐름
 
-`BOOT -> WAIT -> ALIGN -> TRACK` 순서로 자동 진행합니다. 데이터가 끊기거나 방향 계산이 불가능하면 마지막 안전 시선 방향을 유지하는 `HOLD`로 들어가며, Dynamixel 이상은 `FAULT`로 처리합니다. 별도 Serial 명령은 필요하지 않습니다.
+`BOOT -> WAIT -> ALIGN -> TRACK` 순서로 자동 진행합니다. 데이터가 끊기거나 방향 계산이 불가능하면 마지막 안전 시선 방향을 유지하는 `HOLD`로 들어가며, Dynamixel 이상은 `FAULT`로 처리합니다. `HOLD`에서 입력이 다시 정상이어도 0.5초 동안 연속 정상인지 확인한 뒤 `TRACK`으로 복귀한다. 이 동안에도 IMU 기반 hold 제어는 계속된다. 별도 Serial 명령은 필요하지 않습니다.
 
 IMU 자세가 유효해지면 GPS fix가 아직 없어도 현재 짐벌 엔코더 위치와 IMU 자세를 소프트웨어 기준점으로 잡아 기울임 보정을 시작합니다. GPS 기반 로켓 추적은 GPS, 기압계, LoRa 조건까지 충족한 뒤에만 추가됩니다.
 
@@ -43,14 +43,14 @@ IMU 자세가 유효해지면 GPS fix가 아직 없어도 현재 짐벌 엔코�
 | `RANGE` | 수평 거리가 최소 조건보다 짧음 |
 | `GEOMETRY` | 위치/자세로 방향 계산을 만들 수 없음 |
 
-`local_fix=3` 또는 `remote_fix=3`이라도 마지막 GPS 측정값이 오래되었거나 u-blox의 위치 유효 플래그가 없으면 각각 `LOCAL_GPS`, `REMOTE_GPS`가 될 수 있습니다.
+`local_fix=3` 또는 `remote_fix=3`이라도 마지막 GPS 측정값이 오래되었거나 u-blox의 위치 유효 플래그가 없으면 각각 `LOCAL_GPS`, `REMOTE_GPS`가 될 수 있습니다. 페이로드 MAX-M10S에서 NAV-PVT 출력 자체가 3초 이상 멈추면 수신부는 10 Hz 출력 설정을 다시 적용하며, 이 시도 횟수는 `gps_recov`로 표시합니다.
 
 ## Serial 상태 줄
 
 예시:
 
 ```text
-state/block=TRACK/NONE lora=ok532 bad3 lost5 age23 remote_fix=3 local_fix=3 ned=12.4/-3.1/8.2 baro=2.6/-0.1/2.7 imu_ypr=-0.0/1.1/-2.6 target=14.0/31.5 cmd=13.6/31.2 pos=13.4/31.0
+state/block=TRACK/NONE lora=ok532 bad3 lost5 age23 sens_age=20/100/20 gps_recov=0 remote_fix=3 local_fix=3 ned=12.4/-3.1/8.2 baro=2.6/-0.1/2.7 imu_ypr=-0.0/1.1/-2.6 target=14.0/31.5 cmd=13.6/31.2 pos=13.4/31.0
 ```
 
 | 항목 | 의미 |
@@ -60,6 +60,8 @@ state/block=TRACK/NONE lora=ok532 bad3 lost5 age23 remote_fix=3 local_fix=3 ned=
 | `bad3` | 형식 또는 CRC가 틀려 버린 패킷 누적 3개 |
 | `lost5` | sequence 번호상 중간에 빠진 패킷 누적 5개 |
 | `age23` | 마지막 새 패킷을 받은 뒤 경과 시간(ms). 보통 수십 ms 정도면 정상 |
+| `sens_age=20/100/20` | IMU/페이로드 GPS/BMP581의 마지막 새 측정 후 경과 시간(ms). 각각 200/1500/300 ms 이하가 정상 조건 |
+| `gps_recov=0` | 페이로드 MAX-M10S NAV-PVT 출력 자동 복구 시도 횟수. 증가가 계속되면 GPS 전원 또는 I²C 연결을 점검 |
 | `remote_fix=3` | 로켓 GPS fix 상태. `3`은 정상 3D fix, `0`은 fix 없음 |
 | `local_fix=3` | 수신부(페이로드) GPS fix 상태. `3`이면 정상 3D fix |
 | `ned=N/E/Up` | 로켓의 수신부 기준 상대 위치[m]: 북쪽/동쪽/위쪽. `FAULT` 또는 `HOLD`에서는 마지막 계산값 또는 초기값일 수 있음 |
@@ -72,7 +74,8 @@ state/block=TRACK/NONE lora=ok532 bad3 lost5 age23 remote_fix=3 local_fix=3 ned=
 
 ## 운용 주의
 
-- GPS만으로 방위각을 계산하려면 로켓과 페이로드가 충분히 떨어져야 합니다. `TRACK` 최소 수평 거리는 5 m이고, 자동 초기 정렬은 GPS 노이즈를 피하기 위해 더 큰 분리 거리(현재 30 m)와 10초 안정 구간이 필요합니다.
+- GPS만으로 방위각을 계산하려면 로켓과 페이로드가 충분히 떨어져야 합니다. `TRACK`과 자동 초기 정렬의 최소 수평 거리는 모두 5 m이고, 초기 정렬에는 10초 안정 구간이 필요합니다. 기압계 초기 오차 보정값 수집은 두 장치가 수평 30 m 이내일 때만 수행합니다.
+- 짐벌 목표 명령은 50 Hz로 계속 전송한다. Dynamixel 위치/전류/온도 feedback 읽기는 제어 UART를 막지 않도록 2 Hz이며, SD 기록은 2 Hz다.
 - 두 기기가 같은 높이에 있는 preflight 구간에서 기압계 오프셋을 잡습니다. 보정은 수평거리 30 m 이하에서 30개 LoRa 패킷을 모아 수행하지만, 이 조건을 못 맞춰도 tracking은 시작합니다. 이때 pitch에는 기압계 초기 오차가 남을 수 있습니다.
 - BNO085 Game Rotation Vector의 yaw는 절대 북쪽 기준이 아닙니다. 기구 영점, IMU 축 방향, 짐벌 축 방향과 모터 회전 방향은 설정 상수로 보정해야 합니다.
 - GPS 안테나 배치, BMP581 통풍, IMU 축 고정, 짐벌 기구 유격, Dynamixel 영점 및 케이블 간섭은 코드만으로 해결할 수 없는 하드웨어 점검 항목입니다.

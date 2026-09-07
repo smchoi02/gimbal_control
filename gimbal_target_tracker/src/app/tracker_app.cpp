@@ -11,14 +11,30 @@ TrackerApp::TrackerApp(Stream& debug, Stream& lora)
       gimbal_(Serial1, cfg::DXL_DIR_PIN) {}
 
 void TrackerApp::begin() {
-  imu_.begin(cfg::BNO085_ADDRESS, 20, cfg::BNO_USE_GAME_ROTATION_VECTOR);
+  debug_.println(F("boot: imu"));
+  const bool imuOk =
+      imu_.begin(cfg::BNO085_ADDRESS, 20, cfg::BNO_USE_GAME_ROTATION_VECTOR);
+  debug_.print(F("boot: imu=")); debug_.println(imuOk ? F("ok") : F("fail"));
+
+  debug_.println(F("boot: baro"));
   const bool baroOk = barometer_.begin(cfg::BMP581_ADDRESS);
   if (baroOk) barometer_.startReferenceCalibration(cfg::BARO_REFERENCE_SAMPLES);
-  gps_.begin(cfg::MAX_M10S_ADDRESS);
-  e22_.begin(cfg::E22_M0_PIN, cfg::E22_M1_PIN, cfg::E22_AUX_PIN);
-  logger_.begin(cfg::SD_CS_PIN);
+  debug_.print(F("boot: baro=")); debug_.println(baroOk ? F("ok") : F("fail"));
 
-  if (!gimbal_.begin()) {
+  debug_.println(F("boot: gps"));
+  const bool gpsOk = gps_.begin(cfg::MAX_M10S_ADDRESS);
+  debug_.print(F("boot: gps=")); debug_.println(gpsOk ? F("ok") : F("fail"));
+
+  debug_.println(F("boot: e22"));
+  e22_.begin(cfg::E22_M0_PIN, cfg::E22_M1_PIN, cfg::E22_AUX_PIN);
+  debug_.println(F("boot: sd"));
+  const bool sdOk = logger_.begin(cfg::SD_CS_PIN);
+  debug_.print(F("boot: sd=")); debug_.println(sdOk ? F("ok") : F("unavailable"));
+
+  debug_.println(F("boot: gimbal"));
+  const bool gimbalOk = gimbal_.begin();
+  debug_.print(F("boot: gimbal=")); debug_.println(gimbalOk ? F("ok") : F("fail"));
+  if (!gimbalOk) {
     mode_ = TrackMode::FAULT;
     blocker_ = TrackingBlocker::GIMBAL_FAULT;
   }
@@ -31,6 +47,7 @@ void TrackerApp::begin() {
   lastControlUs_ = lastBaroUs_ = lastGpsPollUs_ = lastGimbalFeedbackUs_ =
       lastSdLogUs_ = nowUs;
   lastStatusMs_ = millis();
+  debug_.println(F("boot: ready"));
 }
 
 void TrackerApp::update() {
@@ -117,19 +134,41 @@ void TrackerApp::controlTick(uint32_t nowMs, float dtSeconds) {
     if (trackingReferenceReady_ && attitudeFresh(nowMs)) {
       commandHeldDirection(dtSeconds);
     }
-    if (trackingInputsFresh(nowMs)) {
-      float ned[3];
-      RelativeTarget target;
-      if (targetGeometry(ned, &target)) {
-        mode_ = TrackMode::TRACKING;
-        blocker_ = TrackingBlocker::NONE;
-      }
+    if (!trackingInputsFresh(nowMs)) {
+      // Do not keep displaying the reason that originally entered HOLD.
+      // One sensor may have recovered while another is now stale.
+      blocker_ = inputBlocker(nowMs);
+      trackingRecoveryStartMs_ = 0;
+      return;
     }
+
+    float ned[3];
+    RelativeTarget target;
+    if (!targetGeometry(ned, &target)) {
+      blocker_ = target_geometry::horizontalRangeM(ned) <
+                         cfg::MIN_TRACK_HORIZONTAL_RANGE_M
+                     ? TrackingBlocker::RANGE_TOO_SMALL
+                     : TrackingBlocker::GEOMETRY_INVALID;
+      trackingRecoveryStartMs_ = 0;
+      return;
+    }
+    if (trackingRecoveryStartMs_ == 0) {
+      trackingRecoveryStartMs_ = nowMs;
+      return;
+    }
+    if (static_cast<uint32_t>(nowMs - trackingRecoveryStartMs_) <
+        cfg::TRACK_REACQUIRE_STABLE_MS) {
+      return;
+    }
+    mode_ = TrackMode::TRACKING;
+    blocker_ = TrackingBlocker::NONE;
+    trackingRecoveryStartMs_ = 0;
     return;
   }
 
   if (mode_ != TrackMode::TRACKING) return;
   if (!trackingInputsFresh(nowMs)) {
+    trackingRecoveryStartMs_ = 0;
     enterSafeHold(inputBlocker(nowMs), false);
     return;
   }
@@ -248,6 +287,12 @@ void TrackerApp::printStatus(uint32_t nowMs) {
   const remote_protocol::Parser& parser = e22_.parser();
   const uint32_t packetAge = remote.timestampMs == 0
       ? 0xFFFFFFFFUL : static_cast<uint32_t>(nowMs - remote.timestampMs);
+  const uint32_t imuAge = imu.timestampMs == 0
+      ? 0xFFFFFFFFUL : static_cast<uint32_t>(nowMs - imu.timestampMs);
+  const uint32_t localGpsAge = localGps.timestampMs == 0
+      ? 0xFFFFFFFFUL : static_cast<uint32_t>(nowMs - localGps.timestampMs);
+  const uint32_t localBaroAge = localBaro.timestampMs == 0
+      ? 0xFFFFFFFFUL : static_cast<uint32_t>(nowMs - localBaro.timestampMs);
 
   debug_.print(F("state/block=")); debug_.print(modeName(mode_));
   debug_.print('/'); debug_.print(blockerName(blocker_));
@@ -255,6 +300,10 @@ void TrackerApp::printStatus(uint32_t nowMs) {
   debug_.print(F(" bad")); debug_.print(parser.packetsBad);
   debug_.print(F(" lost")); debug_.print(parser.sequenceLost);
   debug_.print(F(" age")); debug_.print(packetAge);
+  debug_.print(F(" sens_age=")); debug_.print(imuAge);
+  debug_.print('/'); debug_.print(localGpsAge);
+  debug_.print('/'); debug_.print(localBaroAge);
+  debug_.print(F(" gps_recov=")); debug_.print(gps_.recoveryCount());
   debug_.print(F(" remote_fix=")); debug_.print(remote.fixType);
   debug_.print(F(" local_fix=")); debug_.print(localGps.fixType);
   debug_.print(F(" ned=")); debug_.print(relative_.northM, 1); debug_.print('/');
