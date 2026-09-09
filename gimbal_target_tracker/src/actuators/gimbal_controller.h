@@ -8,6 +8,15 @@
 
 class GimbalController {
  public:
+  enum class FeedbackItem : uint8_t {
+    YAW_POSITION,
+    PITCH_POSITION,
+    YAW_CURRENT,
+    PITCH_CURRENT,
+    YAW_TEMPERATURE,
+    PITCH_TEMPERATURE
+  };
+
   GimbalController(HardwareSerial& serial, int directionPin);
 
   bool begin();
@@ -16,7 +25,10 @@ class GimbalController {
   // Capture the current encoder positions as RAM-only gimbal 0-degree poses.
   // This does not write DYNAMIXEL EEPROM or alter hardware offsets.
   bool captureSoftZero();
-  void pollFeedback();
+  // Executes exactly one request-response UART transaction. The application
+  // schedules these items round-robin so telemetry cannot monopolize a tick.
+  void pollFeedbackItem(FeedbackItem item);
+  void recordControlTiming(uint32_t intervalUs);
 
   const GimbalState& state() const { return state_; }
 
@@ -24,6 +36,7 @@ class GimbalController {
   Dynamixel2Arduino dxl_;
   GimbalState state_;
   float filteredYawDeg_ = 0.0f;
+  float filteredYawUnwrappedDeg_ = 0.0f;
   float filteredPitchDeg_ = 0.0f;
   float yawRateDegS_ = 0.0f;
   float pitchRateDegS_ = 0.0f;
@@ -31,6 +44,7 @@ class GimbalController {
   float pitchZeroDeg_ = cfg::DXL_CENTER_DEG;
 
   static float wrapDeg(float angle);
+  static float nearestEquivalentDeg(float wrappedTarget, float reference);
   static float servoDeg(float angle);
   static float clampValue(float value, float low, float high);
   static float moveToward(float value, float target, float maxDelta);

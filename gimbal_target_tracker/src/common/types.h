@@ -100,12 +100,22 @@ struct RelativeTarget {
 struct GimbalState {
   float yawCommandDeg = 0.0f;
   float pitchCommandDeg = 0.0f;
+  // Continuous equivalents retained across the +/-180 degree display seam.
+  // Motor commands remain single-turn unless the hardware mode is changed.
+  float yawCommandUnwrappedDeg = 0.0f;
   float yawPresentDeg = 0.0f;
   float pitchPresentDeg = 0.0f;
+  float yawPresentUnwrappedDeg = 0.0f;
   int16_t yawCurrentRaw = 0;
   int16_t pitchCurrentRaw = 0;
   int8_t yawTemperatureC = 0;
   int8_t pitchTemperatureC = 0;
+  uint32_t lastFeedbackUs = 0;
+  uint32_t maxFeedbackUs = 0;
+  uint32_t slowFeedbackCount = 0;
+  uint32_t lastControlIntervalUs = 0;
+  uint32_t maxControlIntervalUs = 0;
+  uint32_t controlOverrunCount = 0;
   bool limitActive = false;
   bool torqueOn = false;
   bool healthy = false;

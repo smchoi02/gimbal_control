@@ -154,14 +154,17 @@ bool MaxM10sSensor::poll(uint32_t nowMs) {
   uint16_t available = bytesAvailable();
   bool gotFix = false;
 
-  while (available > 0) {
+  // Bound one call to one I2C payload transaction. A complete 100-byte
+  // NAV-PVT frame is assembled across calls by the stream parser, preventing
+  // a GPS burst from holding off the next gimbal control deadline.
+  if (available > 0) {
     const uint8_t chunk = available > 32 ? 32 : static_cast<uint8_t>(available);
     wire_.beginTransmission(address_);
     wire_.write(0xFF);
-    if (wire_.endTransmission(false) != 0) break;
+    if (wire_.endTransmission(false) != 0) return false;
     const int received =
         wire_.requestFrom(static_cast<int>(address_), static_cast<int>(chunk));
-    if (received <= 0) break;
+    if (received <= 0) return false;
     while (wire_.available()) {
       if (parser_.feed(static_cast<uint8_t>(wire_.read()), &fix_)) {
         fix_.timestampMs = nowMs;
@@ -169,7 +172,6 @@ bool MaxM10sSensor::poll(uint32_t nowMs) {
         gotFix = true;
       }
     }
-    available = available > chunk ? available - chunk : 0;
   }
   return gotFix;
 }

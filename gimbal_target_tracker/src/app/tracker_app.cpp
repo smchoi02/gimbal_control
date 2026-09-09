@@ -1,6 +1,7 @@
 #include "tracker_app.h"
 
 #include <math.h>
+#include <stdio.h>
 
 #include "../common/time_utils.h"
 #include "../config/system_config.h"
@@ -44,45 +45,45 @@ void TrackerApp::begin() {
   resetInitialAlignment(millis());
 
   const uint32_t nowUs = micros();
-  lastControlUs_ = lastBaroUs_ = lastGpsPollUs_ = lastGimbalFeedbackUs_ =
-      lastSdLogUs_ = nowUs;
+  lastControlUs_ = lastGpsPollUs_ = nowUs;
   lastStatusMs_ = millis();
   debug_.println(F("boot: ready"));
 }
 
 void TrackerApp::update() {
-  const uint32_t nowMs = millis();
-  const uint32_t nowUs = micros();
+  imu_.poll(millis());
+  e22_.poll(millis());
+  serviceStatusTx();
 
-  imu_.poll(nowMs);
-  e22_.poll(nowMs);
-  if (elapsedUs(nowUs, lastGpsPollUs_, cfg::GPS_POLL_PERIOD_US)) {
-    lastGpsPollUs_ = nowUs;
-    gps_.poll(nowMs);
+  // The IMU and command path always win. All potentially blocking I/O is
+  // deliberately dispatched only after this deadline has been serviced.
+  const uint32_t controlNowUs = micros();
+  const uint32_t controlNowMs = millis();
+  bool controlRan = false;
+  if (elapsedUs(controlNowUs, lastControlUs_, cfg::CONTROL_PERIOD_US)) {
+    const uint32_t controlIntervalUs =
+        static_cast<uint32_t>(controlNowUs - lastControlUs_);
+    const float dtSeconds = controlIntervalUs * 1.0e-6f;
+    lastControlUs_ = controlNowUs;
+    gimbal_.recordControlTiming(controlIntervalUs);
+    controlTick(controlNowMs, dtSeconds);
+    backgroundTick(millis());
+    controlRan = true;
   }
-  if (elapsedUs(nowUs, lastBaroUs_, cfg::BARO_PERIOD_US)) {
-    lastBaroUs_ = nowUs;
-    barometer_.poll(nowMs);
+
+  // GPS parsing is also bounded to one 32-byte I2C chunk per call. Defer it
+  // from a command loop so a control tick never starts two background jobs.
+  const uint32_t gpsNowUs = micros();
+  if (!controlRan &&
+      elapsedUs(gpsNowUs, lastGpsPollUs_, cfg::GPS_POLL_PERIOD_US)) {
+    lastGpsPollUs_ = gpsNowUs;
+    gps_.poll(millis());
   }
-  if (elapsedUs(nowUs, lastControlUs_, cfg::CONTROL_PERIOD_US)) {
-    const float dtSeconds =
-        static_cast<uint32_t>(nowUs - lastControlUs_) * 1.0e-6f;
-    lastControlUs_ = nowUs;
-    controlTick(nowMs, dtSeconds);
-  }
-  if (elapsedUs(nowUs, lastGimbalFeedbackUs_,
-                cfg::GIMBAL_FEEDBACK_PERIOD_US)) {
-    lastGimbalFeedbackUs_ = nowUs;
-    gimbalFeedbackTick();
-  }
-  if (elapsedUs(nowUs, lastSdLogUs_, cfg::SD_LOG_PERIOD_US)) {
-    lastSdLogUs_ = nowUs;
-    sdLogTick(nowMs);
-  }
-  logger_.service(nowMs);
-  if (static_cast<uint32_t>(nowMs - lastStatusMs_) >= cfg::STATUS_PERIOD_MS) {
-    lastStatusMs_ = nowMs;
-    printStatus(nowMs);
+  const uint32_t statusNowMs = millis();
+  if ((cfg::ALLOW_STATUS_OUTPUT_WHILE_TORQUE_ON || !gimbal_.state().torqueOn) &&
+      static_cast<uint32_t>(statusNowMs - lastStatusMs_) >= cfg::STATUS_PERIOD_MS) {
+    lastStatusMs_ = statusNowMs;
+    queueStatus(statusNowMs);
   }
 }
 
@@ -255,8 +256,44 @@ void TrackerApp::enterSafeHold(TrackingBlocker blocker, bool) {
   blocker_ = blocker;
 }
 
-void TrackerApp::gimbalFeedbackTick() {
-  gimbal_.pollFeedback();
+void TrackerApp::backgroundTick(uint32_t nowMs) {
+  // One slot per 20 ms command tick. This yields 15 Hz barometer updates,
+  // 10 Hz position feedback, 5 Hz current feedback, and 2.5 Hz temperature
+  // feedback without ever issuing the former six back-to-back UART reads.
+  switch (backgroundSlot_) {
+    case 0:
+    case 3:
+    case 6:
+      barometer_.poll(nowMs);
+      break;
+    case 1:
+    case 4:
+      gimbal_.pollFeedbackItem(GimbalController::FeedbackItem::YAW_POSITION);
+      break;
+    case 2:
+    case 7:
+      gimbal_.pollFeedbackItem(GimbalController::FeedbackItem::PITCH_POSITION);
+      break;
+    case 5:
+      gimbal_.pollFeedbackItem(GimbalController::FeedbackItem::YAW_CURRENT);
+      break;
+    case 8:
+      gimbal_.pollFeedbackItem(GimbalController::FeedbackItem::PITCH_CURRENT);
+      break;
+    default:
+      if (logger_.cardReady() &&
+          (cfg::ALLOW_SD_WRITES_WHILE_TORQUE_ON ||
+           !gimbal_.state().torqueOn)) {
+        sdLogTick(nowMs);
+      } else {
+        gimbal_.pollFeedbackItem(nextTemperatureIsYaw_
+            ? GimbalController::FeedbackItem::YAW_TEMPERATURE
+            : GimbalController::FeedbackItem::PITCH_TEMPERATURE);
+        nextTemperatureIsYaw_ = !nextTemperatureIsYaw_;
+      }
+      break;
+  }
+  backgroundSlot_ = (backgroundSlot_ + 1) % 10;
   if (!gimbal_.state().healthy) {
     mode_ = TrackMode::FAULT;
     blocker_ = TrackingBlocker::GIMBAL_FAULT;
@@ -264,6 +301,10 @@ void TrackerApp::gimbalFeedbackTick() {
 }
 
 void TrackerApp::sdLogTick(uint32_t nowMs) {
+  if (gimbal_.state().torqueOn && !cfg::ALLOW_SD_WRITES_WHILE_TORQUE_ON) return;
+  if (static_cast<uint32_t>(nowMs - lastSdLogMs_) < cfg::SD_IDLE_LOG_PERIOD_MS)
+    return;
+  lastSdLogMs_ = nowMs;
   const GpsFix& localGps = localGpsInput();
   if (!logger_.ready() && logger_.cardReady() &&
       (localGps.dateValid || nowMs >= cfg::SD_DATE_WAIT_MS)) {
@@ -276,9 +317,14 @@ void TrackerApp::sdLogTick(uint32_t nowMs) {
   logger_.log(nowMs, mode_, blocker_, imu_.sample(), localBarometerInput(),
               localGps, remoteInput(), relative_, gimbal_.state(),
               initialBaroBiasM_, baroBiasReady_);
+  logger_.service(nowMs);
 }
 
-void TrackerApp::printStatus(uint32_t nowMs) {
+void TrackerApp::queueStatus(uint32_t nowMs) {
+  // Never replace a partially transmitted line. Dropping an old telemetry
+  // sample is preferable to making the 50 Hz command loop wait for USB.
+  if (statusTxOffset_ < statusTxLength_) return;
+
   const RemoteTargetSample& remote = remoteInput();
   const GpsFix& localGps = localGpsInput();
   const BarometerSample& localBaro = localBarometerInput();
@@ -294,35 +340,53 @@ void TrackerApp::printStatus(uint32_t nowMs) {
   const uint32_t localBaroAge = localBaro.timestampMs == 0
       ? 0xFFFFFFFFUL : static_cast<uint32_t>(nowMs - localBaro.timestampMs);
 
-  debug_.print(F("state/block=")); debug_.print(modeName(mode_));
-  debug_.print('/'); debug_.print(blockerName(blocker_));
-  debug_.print(F(" lora=ok")); debug_.print(parser.packetsOk);
-  debug_.print(F(" bad")); debug_.print(parser.packetsBad);
-  debug_.print(F(" lost")); debug_.print(parser.sequenceLost);
-  debug_.print(F(" age")); debug_.print(packetAge);
-  debug_.print(F(" sens_age=")); debug_.print(imuAge);
-  debug_.print('/'); debug_.print(localGpsAge);
-  debug_.print('/'); debug_.print(localBaroAge);
-  debug_.print(F(" gps_recov=")); debug_.print(gps_.recoveryCount());
-  debug_.print(F(" remote_fix=")); debug_.print(remote.fixType);
-  debug_.print(F(" local_fix=")); debug_.print(localGps.fixType);
-  debug_.print(F(" ned=")); debug_.print(relative_.northM, 1); debug_.print('/');
-  debug_.print(relative_.eastM, 1); debug_.print('/');
-  debug_.print(relative_.valid ? -relative_.downM : NAN, 1);
-  debug_.print(F(" baro=")); debug_.print(remote.aglM, 1); debug_.print('/');
-  debug_.print(localBaro.aglM, 1); debug_.print('/');
-  debug_.print(initialBaroBiasM_, 1);
-  debug_.print(F(" bias="));
-  debug_.print(baroBiasReady_ ? F("ready") : F("pending"));
-  debug_.print('/'); debug_.print(baroBiasSamples_);
-  debug_.print(F(" imu_ypr=")); debug_.print(imu.yawDeg, 1); debug_.print('/');
-  debug_.print(imu.pitchDeg, 1); debug_.print('/'); debug_.print(imu.rollDeg, 1);
-  debug_.print(F(" target=")); debug_.print(relative_.yawDeg, 1); debug_.print('/');
-  debug_.print(relative_.pitchDeg, 1);
-  debug_.print(F(" cmd=")); debug_.print(gimbal.yawCommandDeg, 1); debug_.print('/');
-  debug_.print(gimbal.pitchCommandDeg, 1);
-  debug_.print(F(" pos=")); debug_.print(gimbal.yawPresentDeg, 1); debug_.print('/');
-  debug_.println(gimbal.pitchPresentDeg, 1);
+  // newlib-nano on this target may omit printf floating-point support. Keep
+  // this diagnostic line integer-only; *_d10 values are degrees/metres x10.
+  const auto d10 = [](float value) -> long {
+    return isfinite(value) ? static_cast<long>(lroundf(value * 10.0f)) : 0L;
+  };
+  const int written = snprintf(
+      statusTxBuffer_, sizeof(statusTxBuffer_),
+      "state/block=%s/%s lora=ok%lu bad%lu lost%lu age%lu sens_age=%lu/%lu/%lu "
+      "gps_recov=%lu remote_fix=%u local_fix=%u imu_d10=%ld/%ld/%ld "
+      "target_d10=%ld/%ld cmd_d10=%ld/%ld pos_d10=%ld/%ld ctl_us=%lu/%lu/%lu "
+      "fb_us=%lu/%lu/%lu\r\n",
+      modeName(mode_), blockerName(blocker_),
+      static_cast<unsigned long>(parser.packetsOk),
+      static_cast<unsigned long>(parser.packetsBad),
+      static_cast<unsigned long>(parser.sequenceLost),
+      static_cast<unsigned long>(packetAge), static_cast<unsigned long>(imuAge),
+      static_cast<unsigned long>(localGpsAge),
+      static_cast<unsigned long>(localBaroAge),
+      static_cast<unsigned long>(gps_.recoveryCount()), remote.fixType,
+      localGps.fixType, d10(imu.yawDeg), d10(imu.pitchDeg), d10(imu.rollDeg),
+      d10(relative_.yawDeg), d10(relative_.pitchDeg),
+      d10(gimbal.yawCommandDeg), d10(gimbal.pitchCommandDeg),
+      d10(gimbal.yawPresentDeg), d10(gimbal.pitchPresentDeg),
+      static_cast<unsigned long>(gimbal.lastControlIntervalUs),
+      static_cast<unsigned long>(gimbal.maxControlIntervalUs),
+      static_cast<unsigned long>(gimbal.controlOverrunCount),
+      static_cast<unsigned long>(gimbal.lastFeedbackUs),
+      static_cast<unsigned long>(gimbal.maxFeedbackUs),
+      static_cast<unsigned long>(gimbal.slowFeedbackCount));
+  if (written <= 0 || static_cast<size_t>(written) >= sizeof(statusTxBuffer_)) {
+    statusTxLength_ = statusTxOffset_ = 0;
+    return;
+  }
+  statusTxLength_ = static_cast<size_t>(written);
+  statusTxOffset_ = 0;
+}
+
+void TrackerApp::serviceStatusTx() {
+  if (statusTxOffset_ >= statusTxLength_) return;
+  const int available = debug_.availableForWrite();
+  if (available <= 0) return;
+  const size_t remaining = statusTxLength_ - statusTxOffset_;
+  const size_t count = remaining < static_cast<size_t>(available)
+      ? remaining : static_cast<size_t>(available);
+  const size_t sent = debug_.write(
+      reinterpret_cast<const uint8_t*>(statusTxBuffer_ + statusTxOffset_), count);
+  statusTxOffset_ += sent;
 }
 
 bool TrackerApp::trackingInputsFresh(uint32_t nowMs) const {

@@ -52,8 +52,8 @@ void SdLogger::writeHeader() {
         "remote_valid,remote_seq,remote_itow_ms,remote_lat_i7,remote_lon_i7,"
         "remote_agl_m,remote_vel_n_mps,remote_vel_e_mps,remote_vel_d_mps,remote_fix_type,"
         "initial_baro_bias_m,baro_bias_ready,rel_n_m,rel_e_m,rel_d_m,rel_up_m,range_m,target_yaw_deg,target_pitch_deg,"
-        "gimbal_yaw_cmd,gimbal_pitch_cmd,gimbal_yaw_pos,gimbal_pitch_pos,"
-        "gimbal_cur_y,gimbal_cur_p,gimbal_temp_y,gimbal_temp_p,"
+        "gimbal_yaw_cmd,gimbal_pitch_cmd,gimbal_yaw_cmd_unwrapped,gimbal_yaw_pos,gimbal_pitch_pos,gimbal_yaw_pos_unwrapped,"
+        "gimbal_cur_y,gimbal_cur_p,gimbal_temp_y,gimbal_temp_p,gimbal_feedback_us,gimbal_feedback_max_us,gimbal_feedback_slow_count,control_interval_us,control_interval_max_us,control_overrun_count,"
         "gimbal_limit,gimbal_torque"));
 }
 
@@ -117,12 +117,20 @@ void SdLogger::log(uint32_t nowMs, TrackMode mode, TrackingBlocker blocker,
   CSV_VALUE(relative.pitchDeg, 3);
   CSV_VALUE(gimbal.yawCommandDeg, 3);
   CSV_VALUE(gimbal.pitchCommandDeg, 3);
+  CSV_VALUE(gimbal.yawCommandUnwrappedDeg, 3);
   CSV_VALUE(gimbal.yawPresentDeg, 3);
   CSV_VALUE(gimbal.pitchPresentDeg, 3);
+  CSV_VALUE(gimbal.yawPresentUnwrappedDeg, 3);
   CSV_VALUE(gimbal.yawCurrentRaw);
   CSV_VALUE(gimbal.pitchCurrentRaw);
   CSV_VALUE(gimbal.yawTemperatureC);
   CSV_VALUE(gimbal.pitchTemperatureC);
+  CSV_VALUE(gimbal.lastFeedbackUs);
+  CSV_VALUE(gimbal.maxFeedbackUs);
+  CSV_VALUE(gimbal.slowFeedbackCount);
+  CSV_VALUE(gimbal.lastControlIntervalUs);
+  CSV_VALUE(gimbal.maxControlIntervalUs);
+  CSV_VALUE(gimbal.controlOverrunCount);
   CSV_VALUE(gimbal.limitActive ? 1 : 0);
   file_.println(gimbal.torqueOn ? 1 : 0);
 

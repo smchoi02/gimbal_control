@@ -75,7 +75,8 @@ state/block=TRACK/NONE lora=ok532 bad3 lost5 age23 sens_age=20/100/20 gps_recov=
 ## 운용 주의
 
 - GPS만으로 방위각을 계산하려면 로켓과 페이로드가 충분히 떨어져야 합니다. `TRACK`과 자동 초기 정렬의 최소 수평 거리는 모두 5 m이고, 초기 정렬에는 10초 안정 구간이 필요합니다. 기압계 초기 오차 보정값 수집은 두 장치가 수평 30 m 이내일 때만 수행합니다.
-- 짐벌 목표 명령은 50 Hz로 계속 전송한다. Dynamixel 위치/전류/온도 feedback 읽기는 제어 UART를 막지 않도록 2 Hz이며, SD 기록은 2 Hz다.
+- 짐벌 목표 명령은 50 Hz로 계속 전송한다. 제어 tick마다 배경 I/O는 최대 한 항목만 실행한다. Dynamixel 위치 feedback은 10 Hz, 전류는 5 Hz, 온도는 축당 2.5 Hz로 분산해 읽으며, GPS는 호출당 최대 32 byte만 처리한다. 토크가 켜진 추적 중에는 SD 쓰기와 긴 상태 Serial 출력이 기본 비활성화되어 제어 주기를 방해하지 않는다.
+- 비행 중 SD 로그 또는 상태 Serial 출력을 다시 켜야 한다면 `system_config.h`의 `ALLOW_SD_WRITES_WHILE_TORQUE_ON` 또는 `ALLOW_STATUS_OUTPUT_WHILE_TORQUE_ON`을 `true`로 바꿀 수 있다. 두 작업은 실행 시간이 보장되지 않으므로, 추적 끊김을 조사하거나 최소화하는 동안에는 `false`를 유지한다.
 - 두 기기가 같은 높이에 있는 preflight 구간에서 기압계 오프셋을 잡습니다. 보정은 수평거리 30 m 이하에서 30개 LoRa 패킷을 모아 수행하지만, 이 조건을 못 맞춰도 tracking은 시작합니다. 이때 pitch에는 기압계 초기 오차가 남을 수 있습니다.
 - BNO085 Game Rotation Vector의 yaw는 절대 북쪽 기준이 아닙니다. 기구 영점, IMU 축 방향, 짐벌 축 방향과 모터 회전 방향은 설정 상수로 보정해야 합니다.
 - GPS 안테나 배치, BMP581 통풍, IMU 축 고정, 짐벌 기구 유격, Dynamixel 영점 및 케이블 간섭은 코드만으로 해결할 수 없는 하드웨어 점검 항목입니다.

@@ -57,18 +57,22 @@ class TrackerApp {
   uint8_t lastBaroBiasSequence_ = 0;
 
   uint32_t lastControlUs_ = 0;
-  uint32_t lastBaroUs_ = 0;
   uint32_t lastGpsPollUs_ = 0;
-  uint32_t lastGimbalFeedbackUs_ = 0;
-  uint32_t lastSdLogUs_ = 0;
+  uint32_t lastSdLogMs_ = 0;
   uint32_t lastStatusMs_ = 0;
+  uint8_t backgroundSlot_ = 0;
+  bool nextTemperatureIsYaw_ = true;
+  char statusTxBuffer_[512] = {};
+  size_t statusTxLength_ = 0;
+  size_t statusTxOffset_ = 0;
   // Zero means there is no uninterrupted healthy input window yet.
   uint32_t trackingRecoveryStartMs_ = 0;
 
   void controlTick(uint32_t nowMs, float dtSeconds);
-  void gimbalFeedbackTick();
+  void backgroundTick(uint32_t nowMs);
   void sdLogTick(uint32_t nowMs);
-  void printStatus(uint32_t nowMs);
+  void queueStatus(uint32_t nowMs);
+  void serviceStatusTx();
   bool trackingInputsFresh(uint32_t nowMs) const;
   bool attitudeFresh(uint32_t nowMs) const;
   bool localBarometerFresh(uint32_t nowMs) const;

@@ -6,16 +6,17 @@ namespace cfg {
 
 // Scheduling
 constexpr uint32_t CONTROL_PERIOD_US = 20000;   // 50 Hz
-constexpr uint32_t BARO_PERIOD_US = 20000;      // 50 Hz
 constexpr uint32_t GPS_POLL_PERIOD_US = 10000;  // NAV-PVT itself is 10 Hz
-// Present-position/current/temperature reads are request-response UART
-// transactions. Keep them off the 50 Hz command path; commands still run at
-// 50 Hz while feedback is sampled at 2 Hz for health/diagnostics.
-constexpr uint32_t GIMBAL_FEEDBACK_PERIOD_US = 500000;  // 2 Hz
-// SD writes are deliberately slower than control. File I/O is synchronous and
-// may stall an MCU briefly; 2 Hz preserves useful flight data without making
-// every 50 Hz control cycle contend with the card.
-constexpr uint32_t SD_LOG_PERIOD_US = 500000;  // 2 Hz
+// Non-control work is dispatched in one bounded round-robin slot per control
+// tick. Never add a blocking transaction to the 50 Hz command path.
+constexpr uint32_t SD_IDLE_LOG_PERIOD_MS = 500;
+// A normal request-response read is about 5--6 ms at 57,600 baud. Count
+// only genuine stalls, not nominal wire time.
+constexpr uint32_t DXL_FEEDBACK_SLOW_US = 10000;
+// SD writes and verbose USB serial output have unbounded blocking time on an
+// Arduino-class MCU. These are enabled for the current logging experiment.
+constexpr bool ALLOW_SD_WRITES_WHILE_TORQUE_ON = false;
+constexpr bool ALLOW_STATUS_OUTPUT_WHILE_TORQUE_ON = true;
 constexpr uint32_t STATUS_PERIOD_MS = 1000;
 constexpr uint32_t INITIAL_ALIGNMENT_MS = 10000;
 constexpr uint16_t INITIAL_ALIGNMENT_MIN_SAMPLES = 30;  // E22 frames
@@ -76,7 +77,9 @@ constexpr float PITCH_SIGN = -1.0f;
 constexpr float GIMBAL_YAW_REFERENCE_OFFSET_DEG = 0.0f;
 constexpr float GIMBAL_PITCH_REFERENCE_OFFSET_DEG = 0.0f;
 constexpr int16_t DXL_GOAL_CURRENT = 700;
-constexpr uint32_t DXL_PROFILE_VELOCITY = 60;
+// Bench-tuned for faster IMU stabilization. Verify temperature/current before
+// raising these further on the flight mechanism.
+constexpr uint32_t DXL_PROFILE_VELOCITY = 100;
 constexpr int8_t DXL_TEMP_LIMIT_C = 65;
 
 // A soft zero is current encoder position stored only in RAM. It does not
@@ -87,13 +90,13 @@ constexpr float YAW_MIN_DEG = -170.0f;
 constexpr float YAW_MAX_DEG = 170.0f;
 constexpr float PITCH_MIN_DEG = -10.0f;
 constexpr float PITCH_MAX_DEG = 90.0f;
-constexpr float MAX_RATE_DEG_S = 120.0f;
+constexpr float MAX_RATE_DEG_S = 150.0f;
 // A first-order target filter plus acceleration limit turns 10 Hz GPS/LoRa
 // target steps into a continuous 50 Hz servo trajectory. Increase the time
 // constant for a calmer bench motion; lower it only after verifying tracking.
-constexpr float GIMBAL_TARGET_FILTER_TIME_CONSTANT_S = 0.35f;
-constexpr float MAX_ACCEL_DEG_S2 = 360.0f;
-constexpr float GIMBAL_COMMAND_DEADBAND_DEG = 0.25f;
+constexpr float GIMBAL_TARGET_FILTER_TIME_CONSTANT_S = 0.08f;
+constexpr float MAX_ACCEL_DEG_S2 = 1200.0f;
+constexpr float GIMBAL_COMMAND_DEADBAND_DEG = 0.08f;
 
 // BNO085 body-vector -> gimbal body-vector mapping. target_geometry first
 // obtains a vector in BNO085 body axes, then applies this signed permutation
